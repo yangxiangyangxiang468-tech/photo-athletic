@@ -118,6 +118,9 @@ h3 { margin: 0; font-size: 16px; }
 .tool i { width: 22px; height: 14px; border-radius: 3px; border: 1.5px solid var(--ink); }
 .tool.on { border-color: var(--ink); background: var(--sun); }
 .locked { opacity: .45; pointer-events: none; }
+.reach { margin: 0; font-size: 13.5px; font-weight: 700; border-radius: 10px; padding: 8px 10px; border: 2px solid var(--ink); }
+.reach.ok { background: #e3f7e8; }
+.reach.ng { background: #fff1c2; }
 
 /* stages list */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 18px; }
@@ -219,6 +222,7 @@ h3 { margin: 0; font-size: 16px; }
           <div class="btns"><button class="btn sm" data-act="undo">1つ戻す</button></div>
         </div>
         <div class="btns"><button class="btn big primary" data-act="test">▶ テストプレイ</button></div>
+        <p class="reach" id="reachNote" hidden></p>
         <p class="note">自分でゴールできたら保存できます。</p>
       </div>
     </div>
@@ -270,7 +274,7 @@ const COLS = 40, ROWS = 22;               // コースは 40×22 マス（横長
 const E = 0, SOLID = 1, PLAT = 2, SPIKE = 3, WATER = 4, BOUNCE = 5;
 const DEFAULT_OPTS = { focus: 50, obj: true, objAmt: 50, edge: true, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
 // 動きの数値（単位はマス・秒）。ジャンプは約3.4マス、ジャンプ台は約7マス
-const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.08, BUF: 0.1 };
+const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.12, BUF: 0.15 }; // COYOTE: 落ちた直後でも跳べる時間、BUF: 着地の少し前に押したジャンプも効く時間
 const STEP = 1 / 120;
 const GHOST_HZ = 30;
 
@@ -376,14 +380,17 @@ function buildTiles(f, o) {
     }
   }
   if (o.color && o.colorAmt > 0) {
-    const satMin = 0.75 - o.colorAmt / 100 * 0.45;
+    // 空や壁（モノでない所）には置かない（青空が水にならないように）。トゲとジャンプ台は色の塊の上の面だけ（大きな赤い物が丸ごとトゲの壁にならないように）
+    const satMin = 0.75 - o.colorAmt / 100 * 0.45, cls = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
+      if (m && !m[i]) continue;
       const [h, s, v] = hsv(f.rgb[i * 3], f.rgb[i * 3 + 1], f.rgb[i * 3 + 2]);
       if (s < satMin || v < 0.28) continue;
-      if (h < 18 || h > 335) t[i] = SPIKE;
-      else if (h >= 185 && h <= 255) t[i] = WATER;
-      else if (h >= 75 && h <= 165) t[i] = BOUNCE;
+      if (h < 18 || h > 335) cls[i] = SPIKE;
+      else if (h >= 185 && h <= 255) cls[i] = WATER;
+      else if (h >= 75 && h <= 165) cls[i] = BOUNCE;
     }
+    for (let i = 0; i < N; i++) if (cls[i] === WATER || (cls[i] && (i < COLS || cls[i - COLS] !== cls[i]))) t[i] = cls[i];
   }
   const start = findSpot(t, true), goal = findSpot(t, false);
   normalize(t, start, goal);
@@ -454,6 +461,99 @@ function stepPlayer(p, st, inp, dt) {
 }
 const tilesToStr = t => Array.from(t).join("");
 const strToTiles = s => Uint8Array.from(s, ch => +ch);
+// ---------- クリアできるかを調べて、届かなければ足場を足す ----------
+// 立てる場所（足元が足場で、そのマスが空いている所）から、いろいろな操作を実際の動き（stepPlayer）で試して、着地できる場所をたどる。
+// 標準の動きより弱いジャンプ・遅い足で調べる（調整パネルで変えた値は使わない）。止まった状態からの操作だけなので、
+// 届くと出たコースは、ふつうに遊べば余裕を持って届く（ぎりぎりのジャンプを要求しない）
+const PH_STD = { ...PH }, PH_EASY = { ...PH, JV: PH.JV * 0.92, BV: PH.BV * 0.95, RUN: PH.RUN * 0.9 };
+const PLANS = (() => {
+  const L = [];
+  for (const d of [-1, 1]) {
+    L.push({ d, walk: true });
+    for (const hold of [0.05, 0.15, 9]) L.push({ d, hold });
+    L.push({ d, hold: 9, delay: 0.22 });  // まっすぐ跳んでから横へ（真上の足場に乗る）
+    L.push({ d, swim: true });            // 水の中で何度も跳ぶ
+  }
+  for (const hold of [0.15, 9]) L.push({ d: 0, hold });
+  return L;
+})();
+function simFrom(st, c, r, plan, out) {
+  const p = { x: c + 0.5 - PH.W / 2, y: r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: true, coyote: PH.COYOTE, buf: 0, cut: false, face: 1, dead: 0, water: false };
+  const inp = { l: false, r: false, j: false, jp: false };
+  let t = 0, left = false;
+  for (let i = 0; i < 300; i++, t += STEP) {
+    const dir = plan.delay && t < plan.delay ? 0 : plan.d;
+    inp.l = dir < 0; inp.r = dir > 0;
+    if (plan.walk) inp.j = inp.jp = false;
+    else if (plan.swim) { inp.jp = i % 18 === 0; inp.j = inp.jp; }
+    else { inp.jp = i === 0; inp.j = t < plan.hold; }
+    const ev = stepPlayer(p, st, inp, STEP);
+    if (ev === "goal") return "goal";
+    if (ev === "die" || p.dead > 0) return null;
+    if (!p.ground) { left = true; continue; }
+    const nc = Math.floor(p.x + PH.W / 2), nr = Math.round(p.y + PH.H) - 1;
+    if ((left || plan.walk) && (nc !== c || nr !== r)) { out.push(nr * COLS + nc); return null; }
+    if (left) return null; // 同じ場所に戻った
+  }
+  return null;
+}
+// 戻り値 { ok: ゴールに届くか, seen: 立てた場所の集合 }
+function reach(st) {
+  const saved = { ...PH }; Object.assign(PH, PH_EASY);
+  try {
+    const N = COLS * ROWS, seen = new Uint8Array(N), q = [st.start.r * COLS + st.start.c];
+    seen[q[0]] = 1;
+    for (let h = 0; h < q.length; h++) {
+      const k = q[h], c = k % COLS, r = (k / COLS) | 0, out = [];
+      for (const plan of PLANS) if (simFrom(st, c, r, plan, out) === "goal") return { ok: true, seen };
+      for (const j of out) if (j >= 0 && j < N && !seen[j]) { seen[j] = 1; q.push(j); }
+    }
+    return { ok: false, seen };
+  } finally { Object.assign(PH, saved); }
+}
+// ゴールに届くまで足場（3マスの薄い足場）を足していく。届く所のうちゴールに近い場所のまわりに置いてみて、
+// 実際にその場所よりゴールに近い所へ行けるようになった置き方だけを残す（壁の向こうに置いてしまわないように）。
+// 一番近い場所が行き止まり（ゴールの真上の天井の上など）なら、次に近い場所から試す
+function ensureClearable(st, maxAdd = 30, budgetMs = 2000) {
+  const g = st.goal, until = Date.now() + budgetMs; // スマホで待たせすぎないよう、調べる時間に上限
+  const score = k => { const c = k % COLS, r = (k / COLS) | 0; return Math.abs(g.c - c) + 2 * Math.max(0, r - g.r) + 0.5 * Math.max(0, g.r - r); };
+  let res = reach(st);
+  for (let n = 0; !res.ok && n < maxAdd; n++) {
+    const anchors = [];
+    for (let k = 0; k < res.seen.length; k++) if (res.seen[k]) anchors.push(k);
+    anchors.sort((a, b) => score(a) - score(b));
+    const picked = []; // 近すぎる場所は除いて、ばらけた候補を10か所まで
+    for (const k of anchors) { if (picked.length >= 10) break; if (picked.every(p => Math.abs(p % COLS - k % COLS) + Math.abs(((p / COLS) | 0) - ((k / COLS) | 0)) >= 3)) picked.push(k); }
+    let improved = false;
+    for (const anchor of picked) {
+      const c0 = anchor % COLS, r0 = (anchor / COLS) | 0, as = score(anchor), dir = Math.sign(g.c - c0) || 1;
+      // まずゴールの方へ。だめなら逆向き・上下にも
+      const ups = r0 > g.r ? [2, 1, 0, -1, -2] : r0 < g.r ? [0, -1, -2, 1, 2] : [0, 1, -1, 2, -2];
+      for (const sd of [dir, -dir]) for (const dx of [3, 2, 1, 0, -1, -2]) for (const up of ups) {
+        if (improved || Date.now() > until) break;
+        const row = r0 + 1 - up, cx = c0 + sd * dx;
+        if (row < 3 || row >= ROWS || cx < 1 || cx > COLS - 2) continue;
+        let ok = true, fresh = false;
+        for (let c = cx - 1; c <= cx + 1; c++) {
+          const v = st.tiles[row * COLS + c];
+          if (isSolid(v) || isSolid(st.tiles[(row - 1) * COLS + c]) || isSolid(st.tiles[(row - 2) * COLS + c])) ok = false; // 壁の中・頭がつかえる所には置かない
+          if (v !== PLAT) fresh = true;
+        }
+        if (!ok || !fresh) continue;
+        const backup = st.tiles.slice();
+        for (let c = cx - 1; c <= cx + 1; c++) st.tiles[row * COLS + c] = PLAT;
+        normalize(st.tiles, st.start, st.goal);
+        const r2 = reach(st);
+        let gain = r2.ok;
+        for (let k = 0; !gain && k < r2.seen.length; k++) if (r2.seen[k] && !res.seen[k] && score(k) < as - 0.01) gain = true;
+        if (gain) { res = r2; improved = true; } else st.tiles.set(backup);
+      }
+      if (improved) break;
+    }
+    if (!improved) break;
+  }
+  return res.ok;
+}
 // ==ENGINE END==
 
 // ---------- 小道具 ----------
@@ -575,6 +675,7 @@ function startMake({ photo, stage }) {
   refit();
   if (stage) { mk.tiles = Uint8Array.from(stage.tiles); mk.start = { ...stage.start }; mk.goal = { ...stage.goal }; mk.edited = true; mk.cleared = stage.best || null; }
   else regen();
+  if (stage) mk.reach = { ok: reach({ tiles: mk.tiles, start: mk.start, goal: mk.goal }).ok, added: 0 };
   show("make"); syncPanel(); drawMake();
 }
 function refit() {
@@ -586,13 +687,28 @@ function refit() {
   sx.drawImage(fit, 0, 0, small.width, small.height);
   mk.feat = cellFeatures(sx.getImageData(0, 0, small.width, small.height).data, small.width, small.height);
 }
-function regen() { const r = buildTiles(mk.feat, mk.opts); mk.tiles = r.tiles; mk.start = r.start; mk.goal = r.goal; mk.edited = false; mk.cleared = null; }
+// fix = true のときは、ゴールまで届くか調べて、届かなければ足場を足す（スライダーを動かしている途中は軽い方だけ）
+function regen(fix = true) {
+  const r = buildTiles(mk.feat, mk.opts); mk.tiles = r.tiles; mk.start = r.start; mk.goal = r.goal; mk.edited = false; mk.cleared = null;
+  if (!fix) { mk.reach = null; return; }
+  const plats = () => mk.tiles.reduce((n, v) => n + (v === PLAT), 0), before = plats();
+  const ok = ensureClearable(r);
+  mk.reach = { ok, added: Math.max(0, Math.round((plats() - before) / 3)) };
+}
+function checkReach() { mk.reach = { ok: reach({ tiles: mk.tiles, start: mk.start, goal: mk.goal }).ok, added: 0 }; showReach(); }
+function showReach() {
+  const el = $("#reachNote"), r = mk.reach;
+  el.hidden = !r; if (!r) return;
+  el.className = "reach " + (r.ok ? "ok" : "ng");
+  el.textContent = r.ok ? `✓ ゴールまで行けるコースです${r.added ? `（届かない所に足場を${r.added}つ足しました）` : ""}` : "⚠ このままだとゴールに届かないかもしれません。指で足場を足してください";
+}
 function syncPanel() {
   document.querySelectorAll("[data-opt]").forEach(el => { const k = el.dataset.opt; if (el.type === "checkbox") el.checked = mk.opts[k]; else el.value = mk.opts[k]; });
   const im = mk.photo, cropped = Math.abs(im.width / im.height - COLS / ROWS) > 0.02;
   $("#focusRule").hidden = mk.fixedCrop || !cropped;
   $("#autoGroup").classList.toggle("locked", mk.edited);
   $("#lockNote").hidden = !mk.edited;
+  showReach();
   $("#tools").innerHTML = TOOLS.map((t, i) => `<button class="tool ${mk.tool === t.k ? "on" : ""}" data-tool="${i}"><i style="background:${t.sw}"></i>${t.label}</button>`).join("");
 }
 function drawMake() { const cv = $("#mk"); paintStage(cv, { tiles: mk.tiles, start: mk.start, goal: mk.goal, imgEl: mk.imgEl }, cv.parentElement.clientWidth * DPR(), true); }
@@ -600,7 +716,11 @@ document.addEventListener("input", e => {
   const k = e.target.dataset?.opt; if (!k || !mk) return;
   mk.opts[k] = e.target.type === "checkbox" ? e.target.checked : +e.target.value;
   if (k === "focus") refit();
-  regen(); drawMake();
+  regen(false); drawMake(); showReach();
+});
+document.addEventListener("change", e => { // 指を離したときに、ゴールまで届くように整える
+  if (!e.target.dataset?.opt || !mk) return;
+  regen(true); drawMake(); showReach();
 });
 // 指で描く（ドラッグの途中のマスも埋める）
 (() => {
@@ -624,7 +744,7 @@ document.addEventListener("input", e => {
     else for (let i = 1; i <= n; i++) paint({ c: Math.round(last.c + (p.c - last.c) * i / n), r: Math.round(last.r + (p.r - last.r) * i / n) });
     last = p; drawMake();
   });
-  const end = () => { if (last) { last = null; normalize(mk.tiles, mk.start, mk.goal); drawMake(); } };
+  const end = () => { if (last) { last = null; normalize(mk.tiles, mk.start, mk.goal); drawMake(); checkReach(); } };
   cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
   function touched() { const was = mk.edited; mk.edited = true; mk.cleared = null; if (!was) syncPanel(); drawMake(); }
 })();
@@ -931,7 +1051,7 @@ document.addEventListener("click", async e => {
   switch (el.dataset.act) {
     case "make-back": if (!mk.edited || confirm("作りかけのコースを捨てますか？")) { mk = null; show("home"); } break;
     case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); } break;
-    case "undo": { const u = mk.undo.pop(); if (u) { Object.assign(mk, u); mk.cleared = null; drawMake(); } break; }
+    case "undo": { const u = mk.undo.pop(); if (u) { Object.assign(mk, u); mk.cleared = null; drawMake(); checkReach(); } break; }
     case "test": runTest(); break;
     case "retest": runTest(); break;
     case "back-make": show("make"); syncPanel(); drawMake(); break;
