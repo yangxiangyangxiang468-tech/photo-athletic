@@ -145,13 +145,19 @@ h3 { margin: 0; font-size: 16px; }
 .hud .time { font-size: 18px; }
 .msg { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); font-family: var(--f-display); font-size: clamp(28px, 7vw, 64px); color: #fff; text-shadow: 3px 3px 0 var(--ink), -1px -1px 0 var(--ink); pointer-events: none; text-align: center; white-space: nowrap; }
 .msg small { display: block; font-family: var(--f-body); font-size: 15px; font-weight: 700; text-shadow: 1px 1px 0 var(--ink), -1px -1px 0 var(--ink); }
-.ctl { position: absolute; width: 68px; height: 68px; border-radius: 50%; border: 2.5px solid var(--ink); background: rgba(255,253,247,.55); font-size: 26px; font-weight: 700; display: grid; place-items: center; touch-action: none; }
+.ctl { position: absolute; width: calc(68px * var(--btn, 1)); height: calc(68px * var(--btn, 1)); border-radius: 50%; border: 2.5px solid var(--ink); background: rgba(255,253,247,.55); font-size: 26px; font-weight: 700; display: grid; place-items: center; touch-action: none; }
 .ctl.on { background: rgba(255,210,63,.9); }
 .ctl.l { left: max(14px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom)); }
-.ctl.r { left: calc(max(14px, env(safe-area-inset-left)) + 80px); bottom: max(14px, env(safe-area-inset-bottom)); }
-.ctl.j { right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); width: 84px; height: 84px; font-size: 15px; background: rgba(255,77,46,.6); color: #fff; }
+.ctl.r { left: calc(max(14px, env(safe-area-inset-left)) + 80px * var(--btn, 1)); bottom: max(14px, env(safe-area-inset-bottom)); }
+.ctl.j { right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); width: calc(84px * var(--btn, 1)); height: calc(84px * var(--btn, 1)); font-size: 15px; background: rgba(255,77,46,.6); color: #fff; }
 .ctl.j.on { background: rgba(255,77,46,.95); }
 @media (pointer: fine) { .ctl { display: none; } }
+.tune { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+.play:has(#playOv:not([hidden])) .tune { display: none; }
+.tunes { display: grid; gap: 10px; }
+.tunes label { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; font-size: 13.5px; font-weight: 700; }
+.tunes input { grid-column: 1 / -1; width: 100%; accent-color: var(--track); }
+.tunes output { font-family: var(--f-mono); font-size: 13px; }
 .exit { position: absolute; top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); }
 .ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(20,19,15,.55); padding: 16px; }
 .sheet { background: var(--card); border: 2px solid var(--ink); border-radius: 16px; box-shadow: 5px 5px 0 var(--ink); padding: 18px 20px; display: grid; gap: 12px; width: min(420px, 100%); max-height: 100%; overflow-y: auto; }
@@ -245,6 +251,7 @@ h3 { margin: 0; font-size: 16px; }
   <button class="ctl r" data-k="r" aria-label="右">▶</button>
   <button class="ctl j" data-k="j" aria-label="ジャンプ">JUMP</button>
   <button class="btn sm exit" data-act="exit">✕ やめる</button>
+  <button class="btn sm tune" data-act="tune">⚙ 調整</button>
   <div class="ov" id="playOv" hidden></div>
 </section>
 
@@ -660,6 +667,8 @@ let run = null;
 const keys = { l: false, r: false, j: false, jp: false };
 // o: { stage(遊べる形), mode: "test"|"solo"|"online", ghosts, onFinish }
 function startRun(o) {
+  applyTune(o.mode === "online" ? { ...TUNE_DEF, btn: tune.btn } : tune); // 対戦は2人とも標準の動き
+  $("#play .tune").hidden = o.mode === "online";
   run = { ...o, p: spawn(o.stage), t: 0, live: false, fin: null, rec: [], acc: 0, last: null, deaths: 0, cd: o.mode === "online" ? 3 : null, opp: null, oppShown: null, sendAt: 0 };
   keys.l = keys.r = keys.j = keys.jp = false;
   document.querySelectorAll(".ctl").forEach(b => b.classList.remove("on"));
@@ -679,7 +688,7 @@ function layoutPlay() {
 addEventListener("resize", () => { if (run) layoutPlay(); if (mk && !$("#make").hidden) drawMake(); });
 function loop(ts) {
   if (!run) return;
-  const dt = run.last == null ? 0 : Math.min(0.05, (ts - run.last) / 1000); run.last = ts;
+  const dt = run.last == null || run.tuning ? 0 : Math.min(0.05, (ts - run.last) / 1000); run.last = ts; // 調整中は止める
   if (run.cd != null) { run.cd -= dt; if (run.cd <= 0) { run.cd = null; run.live = true; keys.jp = false; buzz(60); } }
   else if (!run.live && !run.fin && (keys.l || keys.r || keys.jp)) run.live = true; // 1人のときは動いた瞬間にスタート
   if (run.live && run.fin == null) {
@@ -905,6 +914,47 @@ document.addEventListener("click", async e => {
   }
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "codeIn") joinRoom(e.target.value); });
+
+// ---------- 操作感の調整（この端末だけ。保存は pa_tune） ----------
+const PH0 = { ...PH };
+const TUNE_DEF = { h: PH0.JV ** 2 / (2 * PH0.G), g: PH0.G, run: PH0.RUN, acc: PH0.ACC, fric: PH0.FRIC, air: PH0.AIR, bh: PH0.BV ** 2 / (2 * PH0.G), btn: 1 };
+const TUNE_UI = [ // [キー, 名前, 最小, 最大, 刻み, 単位]
+  ["h", "ジャンプの高さ", 2, 6, 0.1, "マス"], ["g", "重さ（落ちる速さ）", 30, 100, 1, ""], ["run", "走る速さ", 5, 14, 0.5, ""],
+  ["acc", "走り出しの速さ", 30, 160, 5, ""], ["fric", "止まりやすさ", 20, 160, 5, ""], ["air", "空中での曲がりやすさ", 15, 100, 5, ""],
+  ["bh", "ジャンプ台の高さ", 4, 11, 0.5, "マス"], ["btn", "ボタンの大きさ", 0.8, 1.5, 0.05, "倍"]];
+let tune = { ...TUNE_DEF, ...load("pa_tune", {}) };
+function applyTune(t) {
+  const same = k => t[k] === TUNE_DEF[k];
+  PH.G = t.g; PH.RUN = t.run; PH.ACC = t.acc; PH.FRIC = t.fric; PH.AIR = t.air;
+  PH.JV = same("h") && same("g") ? PH0.JV : Math.sqrt(2 * t.g * t.h); // 重さを変えても高さはそのまま
+  PH.BV = same("bh") && same("g") ? PH0.BV : Math.sqrt(2 * t.g * t.bh);
+  document.documentElement.style.setProperty("--btn", t.btn);
+}
+applyTune(tune);
+const tuneVal = (k, v) => k === "btn" ? v.toFixed(2) : (Math.round(v * 10) / 10).toString();
+function openTune() {
+  if (!run || run.mode === "online") return;
+  run.tuning = true;
+  overlay(`<div class="big">⚙ 調整</div><div class="tunes">${TUNE_UI.map(([k, name, a, b, st, u]) =>
+    `<label>${name}<output data-out="${k}">${tuneVal(k, tune[k])}${u}</output><input type="range" min="${a}" max="${b}" step="${st}" value="${tune[k]}" data-tune="${k}"></label>`).join("")}</div>
+    <p class="note">変えるとすぐ効きます。この端末だけの設定で、オンライン対戦では標準の動きになります。</p>
+    <div class="btns"><button class="btn primary" data-act="tune-close">閉じて走る</button><button class="btn" data-act="tune-copy">数値をコピー</button><button class="btn quiet" data-act="tune-reset">元に戻す</button></div>`);
+}
+document.addEventListener("input", e => {
+  const k = e.target.dataset?.tune; if (!k) return;
+  tune[k] = +e.target.value; store("pa_tune", tune); applyTune(tune);
+  const u = TUNE_UI.find(x => x[0] === k)[5]; $(`[data-out="${k}"]`).textContent = tuneVal(k, tune[k]) + u;
+});
+document.addEventListener("click", async e => {
+  const a = e.target.closest("[data-act]")?.dataset.act;
+  if (a === "tune") openTune();
+  if (a === "tune-close") { $("#playOv").hidden = true; if (run) run.tuning = false; }
+  if (a === "tune-reset") { tune = { ...TUNE_DEF }; store("pa_tune", tune); applyTune(tune); openTune(); }
+  if (a === "tune-copy") {
+    const txt = "操作感: " + TUNE_UI.map(([k, name, , , , u]) => `${name} ${tuneVal(k, tune[k])}${u}`).join(" / ");
+    try { await navigator.clipboard.writeText(txt); toast("コピーしました"); } catch (err) { prompt("この文字をコピーしてください", txt); }
+  }
+});
 
 // ---------- アプリらしい手触り ----------
 function buzz(p) { try { navigator.vibrate?.(p); } catch (e) {} } // Android だけ震える（iPhone は非対応）
