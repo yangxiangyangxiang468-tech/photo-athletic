@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>フォトアスレチック</title>
+<meta name="theme-color" content="#f4efe4">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="フォトアスレチック">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Maru+Gothic:wght@500;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* 写真を貼ったスクラップブック風：生成りの紙、黒インクの太い縁、陸上トラックの朱色 */
+:root {
+  --paper: #f4efe4;
+  --card: #fffdf7;
+  --ink: #1b1a17;
+  --muted: #6b665c;
+  --line: #d9d1c0;
+  --track: #ff4d2e;
+  --track-ink: #fff;
+  --sky: #2f6fed;
+  --lime: #2fbf55;
+  --sun: #ffd23f;
+  --shadow: 3px 3px 0 var(--ink);
+  --f-display: "Dela Gothic One", "Hiragino Sans", sans-serif;
+  --f-body: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Hiragino Sans", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 1.6;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  -webkit-tap-highlight-color: transparent;
+}
+body.playing { overflow: hidden; padding: 0; }
+button, input, select { font: inherit; color: inherit; }
+button { touch-action: manipulation; }
+.vh { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 18px; }
+
+.btn {
+  appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 2px solid var(--ink); background: var(--card); color: var(--ink);
+  border-radius: 12px; padding: 9px 16px; font-weight: 700; cursor: pointer;
+  box-shadow: var(--shadow); transition: transform .08s, box-shadow .08s; text-align: center;
+}
+.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+.btn.primary { background: var(--track); color: var(--track-ink); }
+.btn.big { padding: 14px 18px; font-size: 17px; }
+.btn.sm { padding: 5px 10px; font-size: 13px; border-radius: 9px; }
+.btn.quiet { box-shadow: none; border-color: var(--line); color: var(--muted); }
+.btn[disabled] { opacity: .4; pointer-events: none; }
+.btns { display: flex; flex-wrap: wrap; gap: 10px; }
+.note { color: var(--muted); font-size: 13px; margin: 0; }
+h2 { font-family: var(--f-display); font-weight: 400; font-size: 24px; margin: 0; letter-spacing: .02em; }
+h3 { margin: 0; font-size: 16px; }
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.top h2 { flex: 1; }
+
+/* home */
+.hero { display: grid; gap: 10px; padding-top: 8px; }
+.hero h1 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: clamp(40px, 9vw, 78px); line-height: 1.02; letter-spacing: .01em; }
+.hero h1 em { font-style: normal; color: var(--track); }
+.hero p { margin: 0; font-size: 16px; max-width: 34em; }
+.menu { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 14px; }
+.menu .btn { flex-direction: column; align-items: flex-start; text-align: left; padding: 16px 18px; }
+.menu .btn small { font-weight: 500; font-size: 12.5px; opacity: .85; }
+.polaroids { display: flex; gap: 14px; padding: 8px 4px; overflow: hidden; }
+.pola { background: var(--card); border: 2px solid var(--ink); padding: 6px 6px 22px; box-shadow: var(--shadow); flex: none; }
+.pola:nth-child(odd) { transform: rotate(-3deg); }
+.pola:nth-child(even) { transform: rotate(2.5deg); }
+.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
+.how div { border: 2px dashed var(--line); border-radius: 14px; padding: 12px 14px; font-size: 13.5px; }
+.how b { display: block; font-family: var(--f-display); font-weight: 400; font-size: 18px; color: var(--track); }
+
+/* make */
+.make { display: grid; gap: 16px; align-items: start; }
+@media (min-width: 760px), (orientation: landscape) and (min-width: 560px) {
+  .make { grid-template-columns: minmax(0, 1fr) 300px; }
+  .make .panel { max-height: calc(100vh - 110px); overflow-y: auto; }
+}
+.stagebox { border: 2px solid var(--ink); border-radius: 6px; overflow: hidden; box-shadow: var(--shadow); background: #222; line-height: 0; }
+.stagebox canvas { width: 100%; display: block; touch-action: none; }
+.lobby { display: grid; gap: 12px; align-items: start; }
+@media (min-width: 600px) { .lobby { grid-template-columns: minmax(0, 3fr) minmax(200px, 2fr); } }
+.stagebox.preview { width: min(100%, calc((100vh - 170px) * 40 / 22)); min-width: min(100%, 260px); }
+.panel { display: grid; gap: 14px; align-content: start; }
+.group { background: var(--card); border: 2px solid var(--ink); border-radius: 14px; padding: 12px 14px; display: grid; gap: 10px; }
+.rule { display: grid; gap: 4px; }
+.rule label.chk { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.rule input[type=range] { width: 100%; accent-color: var(--track); }
+.rule small { color: var(--muted); font-size: 12px; }
+.tools { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.tool { border: 2px solid var(--line); background: var(--paper); border-radius: 10px; padding: 6px 2px; font-size: 11.5px; font-weight: 700; cursor: pointer; display: grid; justify-items: center; gap: 2px; line-height: 1.2; }
+.tool i { width: 22px; height: 14px; border-radius: 3px; border: 1.5px solid var(--ink); }
+.tool.on { border-color: var(--ink); background: var(--sun); }
+.locked { opacity: .45; pointer-events: none; }
+
+/* stages list */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 18px; }
+.scard { background: var(--card); border: 2px solid var(--ink); border-radius: 6px; padding: 8px 8px 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
+.scard canvas { width: 100%; display: block; border: 1px solid var(--ink); background: #222; }
+.scard .meta { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.scard .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.time { font-family: var(--f-mono); font-weight: 700; }
+.tag { font-size: 11px; border: 1.5px solid var(--ink); border-radius: 999px; padding: 0 8px; background: var(--sun); white-space: nowrap; }
+.empty { border: 2px dashed var(--line); border-radius: 14px; padding: 24px; text-align: center; color: var(--muted); }
+
+/* online */
+.code { font-family: var(--f-mono); font-size: 40px; letter-spacing: .25em; font-weight: 700; color: var(--track); }
+.join { display: flex; gap: 8px; flex-wrap: wrap; }
+.join input { flex: 1 1 140px; min-width: 0; border: 2px solid var(--ink); border-radius: 12px; padding: 9px 12px; font-family: var(--f-mono); font-size: 20px; letter-spacing: .25em; text-transform: uppercase; background: var(--card); }
+.status { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { border: 2px solid var(--ink); border-radius: 999px; padding: 2px 12px; font-size: 13px; font-weight: 700; background: var(--card); }
+.pill.ok { background: var(--lime); color: #fff; }
+
+/* play：画面いっぱいのキャンバスと、上に重ねる操作ボタン */
+.play { position: fixed; inset: 0; background: #14130f; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.play canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hud { position: absolute; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; pointer-events: none; }
+.hud .pill { background: rgba(255,253,247,.92); }
+.hud .time { font-size: 18px; }
+.msg { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); font-family: var(--f-display); font-size: clamp(28px, 7vw, 64px); color: #fff; text-shadow: 3px 3px 0 var(--ink), -1px -1px 0 var(--ink); pointer-events: none; text-align: center; white-space: nowrap; }
+.msg small { display: block; font-family: var(--f-body); font-size: 15px; font-weight: 700; text-shadow: 1px 1px 0 var(--ink), -1px -1px 0 var(--ink); }
+.ctl { position: absolute; width: 68px; height: 68px; border-radius: 50%; border: 2.5px solid var(--ink); background: rgba(255,253,247,.55); font-size: 26px; font-weight: 700; display: grid; place-items: center; touch-action: none; }
+.ctl.on { background: rgba(255,210,63,.9); }
+.ctl.l { left: max(14px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom)); }
+.ctl.r { left: calc(max(14px, env(safe-area-inset-left)) + 80px); bottom: max(14px, env(safe-area-inset-bottom)); }
+.ctl.j { right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); width: 84px; height: 84px; font-size: 15px; background: rgba(255,77,46,.6); color: #fff; }
+.ctl.j.on { background: rgba(255,77,46,.95); }
+@media (pointer: fine) { .ctl { display: none; } }
+.exit { position: absolute; top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); }
+.ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(20,19,15,.55); padding: 16px; }
+.sheet { background: var(--card); border: 2px solid var(--ink); border-radius: 16px; box-shadow: 5px 5px 0 var(--ink); padding: 18px 20px; display: grid; gap: 12px; width: min(420px, 100%); max-height: 100%; overflow-y: auto; }
+.sheet .big { font-family: var(--f-display); font-size: 30px; line-height: 1.1; }
+.sheet .time { font-size: 28px; color: var(--track); }
+.sheet input[type=text] { border: 2px solid var(--ink); border-radius: 10px; padding: 7px 10px; background: var(--paper); width: 100%; }
+
+.rotate { display: none; }
+@media (orientation: portrait) and (pointer: coarse) {
+  body.playing .rotate { position: fixed; inset: 0; z-index: 50; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; background: var(--paper); }
+}
+.rotate svg { width: 80px; height: 80px; }
+.rotate p { margin: 0; font-weight: 700; font-size: 17px; }
+.toast { position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; z-index: 60; max-width: calc(100% - 32px); font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+</style>
+
+<!-- ホーム -->
+<section id="home" class="screen">
+  <div class="wrap">
+    <header class="hero">
+      <h1>フォト<br><em>アスレチック</em></h1>
+      <p>写真を撮ると、それがアスレチックのコースになる。机のふちが足場に、赤いものはトゲに。友だちのコースでタイムを競おう。</p>
+    </header>
+    <div class="menu">
+      <label class="btn big primary" for="photoIn">📷 写真でコースを作る<small>撮影、またはアルバムから選ぶ</small></label>
+      <button class="btn big" data-go="stages">マイコース<small id="stageCount">作ったコース・もらったコース</small></button>
+      <button class="btn big" data-go="online">オンライン対戦<small>部屋コードで友だちと同時に走る</small></button>
+    </div>
+    <input type="file" id="photoIn" accept="image/*" class="vh">
+    <div class="how">
+      <div><b>1 撮る</b>写真の「物のふち」は薄い足場、「暗い所」は地面、「赤・青・緑」はトゲ・水・ジャンプ台になる。</div>
+      <div><b>2 整える</b>どれを使うか・どれくらい使うかを調整して、足りない足場は指で描き足す。</div>
+      <div><b>3 クリアして公開</b>自分でゴールできたコースだけ保存できる。リンクで送ると、相手はあなたのゴーストと勝負できる。</div>
+    </div>
+  </div>
+</section>
+
+<!-- コースを作る -->
+<section id="make" class="screen" hidden>
+  <div class="wrap">
+    <div class="top"><h2>コースを作る</h2><button class="btn sm quiet" data-act="make-back">やめる</button></div>
+    <div class="make">
+      <div class="stagebox"><canvas id="mk"></canvas></div>
+      <div class="panel">
+        <div class="group" id="autoGroup">
+          <h3>写真から自動で作る</h3>
+          <div class="rule" id="focusRule"><label>写真の位置</label><input type="range" min="0" max="100" data-opt="focus"><small>写真の上下（左右）どこをコースに使うか</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="edge"> 物のふち → 薄い足場</label><input type="range" min="2" max="30" data-opt="edgeAmt"><small>下からすり抜けて乗れる足場</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="dark"> 暗い所 → 地面</label><input type="range" min="0" max="45" data-opt="darkAmt"><small>紙にペンで描いて撮ると自分でコースが描ける</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="color"> 色 → しかけ</label><input type="range" min="0" max="100" data-opt="colorAmt"><small>赤 = トゲ　青 = 水　緑 = ジャンプ台</small></div>
+        </div>
+        <p class="note" id="lockNote" hidden>手で描き直したので、自動の設定は止めています。<button class="btn sm quiet" data-act="unlock">自動に戻す</button></p>
+        <div class="group">
+          <h3>指で描く</h3>
+          <div class="tools" id="tools"></div>
+          <div class="btns"><button class="btn sm" data-act="undo">1つ戻す</button></div>
+        </div>
+        <div class="btns"><button class="btn big primary" data-act="test">▶ テストプレイ</button></div>
+        <p class="note">自分でゴールできたら保存できます。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- マイコース -->
+<section id="stages" class="screen" hidden>
+  <div class="wrap">
+    <div class="top"><h2>マイコース</h2><button class="btn sm quiet" data-go="home">戻る</button></div>
+    <div class="grid" id="stageGrid"></div>
+  </div>
+</section>
+
+<!-- もらったコース（リンクから開いたとき） -->
+<section id="import" class="screen" hidden>
+  <div class="wrap" id="importBody"></div>
+</section>
+
+<!-- オンライン対戦 -->
+<section id="online" class="screen" hidden>
+  <div class="wrap" id="onlineBody"></div>
+</section>
+
+<!-- プレイ画面 -->
+<section id="play" class="screen play" hidden>
+  <canvas id="gc"></canvas>
+  <div class="hud"><span class="pill time" id="hTime">0.00</span><span class="pill" id="hInfo" hidden></span><span class="pill" id="hOpp" hidden></span></div>
+  <div class="msg" id="hMsg" hidden></div>
+  <button class="ctl l" data-k="l" aria-label="左">◀</button>
+  <button class="ctl r" data-k="r" aria-label="右">▶</button>
+  <button class="ctl j" data-k="j" aria-label="ジャンプ">JUMP</button>
+  <button class="btn sm exit" data-act="exit">✕ やめる</button>
+  <div class="ov" id="playOv" hidden></div>
+</section>
+
+<div class="rotate" role="alert">
+  <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="22" width="48" height="26" rx="5"/><path d="M15 12a24 24 0 0 1 29-2"/><path d="M45 4v7h-7"/></svg>
+  <p>スマホを横向きにしてください</p>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script>
+"use strict";
+// ==ENGINE START== （ここから ==ENGINE END== までは画面に触らない処理。node でテストできる）
+const COLS = 40, ROWS = 22;               // コースは 40×22 マス（横長 16:9 くらい）
+const E = 0, SOLID = 1, PLAT = 2, SPIKE = 3, WATER = 4, BOUNCE = 5;
+const DEFAULT_OPTS = { focus: 50, edge: true, edgeAmt: 12, dark: true, darkAmt: 18, color: true, colorAmt: 40 };
+// 動きの数値（単位はマス・秒）。ジャンプは約3.4マス、ジャンプ台は約7マス
+const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.08, BUF: 0.1 };
+const STEP = 1 / 120;
+const GHOST_HZ = 30;
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const approach = (v, to, d) => v < to ? Math.min(to, v + d) : Math.max(to, v - d);
+function percentile(arr, p) { const s = Array.from(arr).sort((a, b) => a - b); return s[clamp(Math.floor(p * (s.length - 1)), 0, s.length - 1)]; }
+function hsv(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 1e-6) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, mx ? d / mx : 0, mx];
+}
+
+// 写真（幅 COLS*8・高さ ROWS*8 の RGBA）からマスごとの明るさ・横向きのふちの強さ・平均色を出す
+function cellFeatures(d, W, H) {
+  const cw = W / COLS, ch = H / ROWS, L = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) L[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255;
+  const N = COLS * ROWS, lum = new Float32Array(N), edge = new Float32Array(N), rgb = new Float32Array(N * 3);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    let sl = 0, se = 0, sr = 0, sg = 0, sb = 0, n = 0;
+    for (let y = r * ch; y < (r + 1) * ch; y++) for (let x = c * cw; x < (c + 1) * cw; x++) {
+      const i = y * W + x;
+      sl += L[i]; sr += d[i * 4]; sg += d[i * 4 + 1]; sb += d[i * 4 + 2]; n++;
+      if (y > 0 && y < H - 1 && x > 0 && x < W - 1) se += Math.max(0, Math.abs(L[i + W] - L[i - W]) - 0.7 * Math.abs(L[i + 1] - L[i - 1]));
+    }
+    const k = r * COLS + c;
+    lum[k] = sl / n; edge[k] = se; rgb[k * 3] = sr / n / 255; rgb[k * 3 + 1] = sg / n / 255; rgb[k * 3 + 2] = sb / n / 255;
+  }
+  return { lum, edge, rgb };
+}
+
+const standable = v => v === SOLID || v === PLAT || v === BOUNCE;
+// 写真の特徴と設定からマスを決める。優先順位：色のしかけ ＞ 暗い所の地面 ＞ ふちの足場
+function buildTiles(f, o) {
+  const N = COLS * ROWS, t = new Uint8Array(N);
+  if (o.dark && o.darkAmt > 0) {
+    // 暗い順に darkAmt% まで。ただし写真の中くらいの明るさよりはっきり暗いマスだけ（白い紙ばかりの写真が全部地面にならないように）
+    const thr = Math.min(percentile(f.lum, o.darkAmt / 100), percentile(f.lum, 0.5) - 0.08), raw = new Uint8Array(N);
+    for (let i = 0; i < N; i++) raw[i] = f.lum[i] <= thr ? 1 : 0;
+    // ばらばらの点を減らす（まわり9マスの多数決）
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      let n = 0;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS) n += raw[rr * COLS + cc]; }
+      if (n >= 5 || (n >= 4 && raw[r * COLS + c])) t[r * COLS + c] = SOLID;
+    }
+  }
+  if (o.edge && o.edgeAmt > 0) {
+    const thr = Math.max(1, percentile(f.edge, 1 - o.edgeAmt / 100)), cand = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (t[i] === E && f.edge[i] >= thr) cand[i] = 1;
+    // 縦に重なったふちは一番上だけ、横に2マス以上続くものだけ足場にする
+    for (let i = N - 1; i >= COLS; i--) if (cand[i] && cand[i - COLS]) cand[i] = 0;
+    for (let r = 0; r < ROWS; r++) {
+      let c = 0;
+      while (c < COLS) {
+        if (!cand[r * COLS + c]) { c++; continue; }
+        let e = c; while (e < COLS && cand[r * COLS + e]) e++;
+        if (e - c >= 2) for (let x = c; x < e; x++) t[r * COLS + x] = PLAT;
+        c = e;
+      }
+    }
+  }
+  if (o.color && o.colorAmt > 0) {
+    const satMin = 0.75 - o.colorAmt / 100 * 0.45;
+    for (let i = 0; i < N; i++) {
+      const [h, s, v] = hsv(f.rgb[i * 3], f.rgb[i * 3 + 1], f.rgb[i * 3 + 2]);
+      if (s < satMin || v < 0.28) continue;
+      if (h < 18 || h > 335) t[i] = SPIKE;
+      else if (h >= 185 && h <= 255) t[i] = WATER;
+      else if (h >= 75 && h <= 165) t[i] = BOUNCE;
+    }
+  }
+  const start = findSpot(t, true), goal = findSpot(t, false);
+  normalize(t, start, goal);
+  return { tiles: t, start, goal };
+}
+// スタート・ゴールを置く場所：左端（右端）近くで、足場の上に2マスの空きがある一番低い所。無ければ台を作る
+function findSpot(t, left) {
+  for (let k = 1; k <= 8; k++) {
+    const c = left ? k : COLS - 1 - k;
+    for (let r = ROWS - 2; r >= 2; r--) if (standable(t[(r + 1) * COLS + c]) && t[r * COLS + c] === E && t[(r - 1) * COLS + c] === E) return { c, r };
+  }
+  const c = left ? 2 : COLS - 3, r = ROWS - 4;
+  for (let dc = -1; dc <= 1; dc++) t[(r + 1) * COLS + c + dc] = SOLID;
+  return { c, r };
+}
+// スタート・ゴールのマスとその上を空け、すぐ横のトゲを消す（出た瞬間にやられないように）
+function normalize(t, ...spots) {
+  for (const s of spots) {
+    for (const r of [s.r, s.r - 1]) if (r >= 0) t[r * COLS + s.c] = E;
+    for (const dc of [-1, 1]) { const c = s.c + dc; if (c >= 0 && c < COLS && t[s.r * COLS + c] === SPIKE) t[s.r * COLS + c] = E; }
+  }
+}
+
+function tileAt(t, c, r) { if (c < 0 || c >= COLS || r < 0) return SOLID; if (r >= ROWS) return E; return t[r * COLS + c]; }
+const isSolid = v => v === SOLID || v === BOUNCE;
+function spawn(st) { return { x: st.start.c + 0.5 - PH.W / 2, y: st.start.r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: false, coyote: 0, buf: 0, cut: false, face: 1, dead: 0, water: false }; }
+// 1コマ進める。inp = { l, r, j: 押している, jp: 今押した }。戻り値 "die" | "goal" | null
+function stepPlayer(p, st, inp, dt) {
+  const t = st.tiles;
+  if (p.dead > 0) { p.dead -= dt; if (p.dead <= 0) Object.assign(p, spawn(st)); return null; }
+  p.water = tileAt(t, Math.floor(p.x + PH.W / 2), Math.floor(p.y + PH.H / 2)) === WATER;
+  const dir = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
+  if (dir) p.face = dir;
+  const max = PH.RUN * (p.water ? 0.6 : 1);
+  p.vx = dir ? approach(p.vx, dir * max, (p.ground ? PH.ACC : PH.AIR) * dt) : approach(p.vx, 0, (p.ground ? PH.FRIC : PH.AIR * 0.5) * dt);
+  p.buf = inp.jp ? PH.BUF : Math.max(0, p.buf - dt);
+  p.coyote = p.ground ? PH.COYOTE : Math.max(0, p.coyote - dt);
+  if (p.water) { if (p.buf > 0) { p.vy = -PH.SWIM; p.buf = 0; p.cut = false; } }
+  else if (p.buf > 0 && p.coyote > 0) { p.vy = -PH.JV; p.buf = 0; p.coyote = 0; p.cut = true; }
+  if (p.cut && !inp.j && p.vy < 0) { p.vy *= 0.45; p.cut = false; } // ボタンを早く離すと低いジャンプ
+  if (p.vy >= 0) p.cut = false;
+  p.vy = Math.min(p.water ? 3.5 : PH.MAXF, p.vy + PH.G * (p.water ? 0.3 : 1) * dt);
+  // 横
+  p.x += p.vx * dt;
+  { const r0 = Math.floor(p.y + 1e-6), r1 = Math.floor(p.y + PH.H - 1e-6);
+    if (p.vx > 0) { const c = Math.floor(p.x + PH.W - 1e-6); for (let r = r0; r <= r1; r++) if (isSolid(tileAt(t, c, r))) { p.x = c - PH.W; p.vx = 0; break; } }
+    else if (p.vx < 0) { const c = Math.floor(p.x + 1e-6); for (let r = r0; r <= r1; r++) if (isSolid(tileAt(t, c, r))) { p.x = c + 1; p.vx = 0; break; } } }
+  // 縦（薄い足場は上から落ちてきたときだけ乗れる）
+  const prevB = p.y + PH.H;
+  p.y += p.vy * dt; p.ground = false;
+  { const c0 = Math.floor(p.x + 1e-6), c1 = Math.floor(p.x + PH.W - 1e-6);
+    if (p.vy > 0) {
+      const r = Math.floor(p.y + PH.H - 1e-6); let land = false, bounce = false;
+      for (let c = c0; c <= c1; c++) { const v = tileAt(t, c, r); if (isSolid(v) || (v === PLAT && prevB <= r + 1e-3)) { land = true; if (v === BOUNCE) bounce = true; } }
+      if (land) { p.y = r - PH.H; p.vy = 0; p.ground = true; if (bounce) { p.vy = -PH.BV; p.ground = false; } }
+    } else if (p.vy < 0) {
+      const r = Math.floor(p.y + 1e-6);
+      for (let c = c0; c <= c1; c++) if (isSolid(tileAt(t, c, r))) { p.y = r + 1; p.vy = 0; break; }
+    } }
+  // トゲ・落下・ゴール
+  const die = () => { p.dead = 0.5; p.vx = p.vy = 0; return "die"; };
+  for (let r = Math.floor(p.y + 0.15); r <= Math.floor(p.y + PH.H - 0.02); r++)
+    for (let c = Math.floor(p.x + 0.12); c <= Math.floor(p.x + PH.W - 0.12); c++) if (tileAt(t, c, r) === SPIKE) return die();
+  if (p.y > ROWS + 0.5) return die();
+  const g = st.goal;
+  if (p.x < g.c + 1 && p.x + PH.W > g.c && p.y < g.r + 1 && p.y + PH.H > g.r - 1) return "goal";
+  return null;
+}
+const tilesToStr = t => Array.from(t).join("");
+const strToTiles = s => Uint8Array.from(s, ch => +ch);
+// ==ENGINE END==
+
+// ---------- 小道具 ----------
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = ms => ms == null ? "--" : (ms / 1000).toFixed(2);
+const DPR = () => Math.min(2, window.devicePixelRatio || 1);
+function store(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+function load(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
+let toastTimer;
+function toast(msg) { const el = $("#toast"); el.textContent = msg; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.hidden = true, 2600); }
+function show(name) {
+  document.querySelectorAll(".screen").forEach(s => s.hidden = s.id !== name);
+  document.body.classList.toggle("playing", name === "play");
+  if (name !== "play") run = null;
+  if (name === "stages") renderStages();
+  if (name === "online") renderOnline();
+  if (name === "home") $("#stageCount").textContent = stages.length ? `${stages.length}コース` : "作ったコース・もらったコース";
+  window.scrollTo(0, 0);
+}
+function loadImage(src) { return new Promise((ok, ng) => { const im = new Image(); im.onload = () => ok(im); im.onerror = ng; im.src = src; }); }
+const IMG_W = 640, IMG_H = 352; // 保存する写真の大きさ（コースと同じ縦横比）
+function canvasOf(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
+
+// ---------- コースの描画 ----------
+const COL = { solid: "rgba(16,15,12,.62)", edge: "#fffbe8", plat: "#ffd23f", spike: "#ff3b30", water: "rgba(47,111,237,.5)", bounce: "#2fbf55", ink: "#1b1a17" };
+function drawTiles(ctx, st, cs, grid) {
+  const t = st.tiles;
+  if (grid) { ctx.strokeStyle = "rgba(255,255,255,.12)"; ctx.lineWidth = 1; ctx.beginPath(); for (let c = 1; c < COLS; c++) { ctx.moveTo(c * cs, 0); ctx.lineTo(c * cs, ROWS * cs); } for (let r = 1; r < ROWS; r++) { ctx.moveTo(0, r * cs); ctx.lineTo(COLS * cs, r * cs); } ctx.stroke(); }
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const v = t[r * COLS + c], x = c * cs, y = r * cs;
+    if (v === SOLID) {
+      ctx.fillStyle = COL.solid; ctx.fillRect(x, y, cs, cs);
+      ctx.fillStyle = COL.edge; const lw = Math.max(1.5, cs * 0.14);
+      if (tileAt(t, c, r - 1) !== SOLID && r > 0) ctx.fillRect(x, y, cs, lw);
+      ctx.globalAlpha = .5;
+      if (tileAt(t, c - 1, r) !== SOLID && c > 0) ctx.fillRect(x, y, lw * .6, cs);
+      if (tileAt(t, c + 1, r) !== SOLID && c < COLS - 1) ctx.fillRect(x + cs - lw * .6, y, lw * .6, cs);
+      ctx.globalAlpha = 1;
+    } else if (v === PLAT) {
+      ctx.fillStyle = COL.plat; ctx.fillRect(x, y, cs, cs * 0.3);
+      ctx.fillStyle = COL.ink; ctx.fillRect(x, y + cs * 0.3, cs, Math.max(1, cs * 0.07));
+    } else if (v === SPIKE) {
+      ctx.fillStyle = COL.spike; ctx.strokeStyle = "#fff"; ctx.lineWidth = Math.max(1, cs * 0.06);
+      ctx.beginPath();
+      for (let k = 0; k < 2; k++) { const bx = x + k * cs / 2; ctx.moveTo(bx, y + cs); ctx.lineTo(bx + cs / 4, y + cs * 0.15); ctx.lineTo(bx + cs / 2, y + cs); }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else if (v === WATER) {
+      ctx.fillStyle = COL.water; ctx.fillRect(x, y, cs, cs);
+      if (tileAt(t, c, r - 1) !== WATER) { ctx.strokeStyle = "#cfe0ff"; ctx.lineWidth = Math.max(1, cs * 0.08); ctx.beginPath(); ctx.moveTo(x, y + cs * .15); ctx.quadraticCurveTo(x + cs / 4, y, x + cs / 2, y + cs * .15); ctx.quadraticCurveTo(x + cs * .75, y + cs * .3, x + cs, y + cs * .15); ctx.stroke(); }
+    } else if (v === BOUNCE) {
+      ctx.fillStyle = COL.bounce; ctx.fillRect(x, y + cs * 0.55, cs, cs * 0.45);
+      ctx.fillStyle = "#e9ffe9"; ctx.fillRect(x + cs * .1, y + cs * .2, cs * .8, cs * .18);
+      ctx.strokeStyle = COL.ink; ctx.lineWidth = Math.max(1, cs * .07); ctx.beginPath();
+      ctx.moveTo(x + cs * .3, y + cs * .38); ctx.lineTo(x + cs * .7, y + cs * .45); ctx.lineTo(x + cs * .3, y + cs * .52); ctx.lineTo(x + cs * .7, y + cs * .58); ctx.stroke();
+    }
+  }
+  drawFlag(ctx, st.start, cs, "#ffffff", "S");
+  drawFlag(ctx, st.goal, cs, null, "G");
+}
+function drawFlag(ctx, s, cs, color, label) {
+  const x = s.c * cs, y = s.r * cs;
+  ctx.fillStyle = COL.ink; ctx.fillRect(x + cs * .15, y - cs * .95, Math.max(1.5, cs * .1), cs * 1.95);
+  if (color) { ctx.fillStyle = color; ctx.fillRect(x + cs * .25, y - cs * .9, cs * .7, cs * .5); }
+  else { const q = cs * .175; for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) { ctx.fillStyle = (i + j) % 2 ? "#fff" : COL.ink; ctx.fillRect(x + cs * .25 + i * q, y - cs * .9 + j * q, q, q); } }
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = Math.max(1, cs * .05); ctx.strokeRect(x + cs * .25, y - cs * .9, cs * .7, cs * .52);
+  if (color) { ctx.fillStyle = COL.ink; ctx.font = `700 ${Math.round(cs * .42)}px "Zen Maru Gothic", "Hiragino Sans", sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, x + cs * .6, y - cs * .63); }
+}
+// 写真＋マスを canvas に描く（w = 描く幅 px）
+function paintStage(cv, st, w, grid) {
+  const cs = w / COLS; cv.width = Math.round(w); cv.height = Math.round(cs * ROWS);
+  const ctx = cv.getContext("2d");
+  if (st.imgEl) ctx.drawImage(st.imgEl, 0, 0, cv.width, cv.height); else { ctx.fillStyle = "#333"; ctx.fillRect(0, 0, cv.width, cv.height); }
+  drawTiles(ctx, st, cs, grid);
+}
+function drawRunner(ctx, x, y, cs, color, face, alpha = 1, label) {
+  const w = PH.W * cs, h = PH.H * cs, rr = w * .35;
+  ctx.save(); ctx.globalAlpha = alpha;
+  ctx.fillStyle = color; ctx.strokeStyle = COL.ink; ctx.lineWidth = Math.max(1.5, cs * .08);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y); ctx.lineTo(x + w - rr, y); ctx.quadraticCurveTo(x + w, y, x + w, y + rr); ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + rr); ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  const ex = x + w / 2 + face * w * .18, ey = y + h * .35;
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ex - w * .13, ey, w * .14, 0, 7); ctx.arc(ex + w * .13, ey, w * .14, 0, 7); ctx.fill();
+  ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(ex - w * .13 + face * w * .05, ey, w * .07, 0, 7); ctx.arc(ex + w * .13 + face * w * .05, ey, w * .07, 0, 7); ctx.fill();
+  if (label) { ctx.font = `700 ${Math.max(10, Math.round(cs * .5))}px "Zen Maru Gothic", "Hiragino Sans", sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.strokeText(label, x + w / 2, y - 3); ctx.fillStyle = "#fff"; ctx.fillText(label, x + w / 2, y - 3); }
+  ctx.restore();
+}
+
+// ---------- コースの保存 ----------
+// 保存形式: { id, name, at, img(dataURL), tiles(文字列), start, goal, opts, best:{ms, ghost}, author:{ms, ghost}|null, from:"mine"|"shared" }
+let stages = load("pa_stages", []);
+function saveStages() { if (!store("pa_stages", stages)) { toast("保存できませんでした（端末の保存容量がいっぱいかもしれません）"); return false; } return true; }
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+async function hydrate(s) { // 保存形式 → 遊べる形（tiles を配列に、写真を Image に）
+  const st = { ...s, tiles: typeof s.tiles === "string" ? strToTiles(s.tiles) : s.tiles };
+  try { st.imgEl = await loadImage(s.img); } catch (e) { st.imgEl = null; }
+  return st;
+}
+const dehydrate = st => { const { imgEl, ...rest } = st; return { ...rest, tiles: tilesToStr(st.tiles) }; };
+
+// ---------- コースを作る ----------
+let mk = null; // { photo, fit, feat, opts, tiles, start, goal, edited, tool, undo, cleared, id, name, fixedCrop, imgEl }
+const TOOLS = [
+  { k: SOLID, label: "地面", sw: "rgba(16,15,12,.75)" }, { k: PLAT, label: "薄い足場", sw: "#ffd23f" }, { k: SPIKE, label: "トゲ", sw: "#ff3b30" }, { k: WATER, label: "水", sw: "#2f6fed" },
+  { k: BOUNCE, label: "ジャンプ台", sw: "#2fbf55" }, { k: E, label: "消す", sw: "#fff" }, { k: "start", label: "スタート", sw: "#fff" }, { k: "goal", label: "ゴール", sw: "repeating-linear-gradient(90deg,#000 0 4px,#fff 4px 8px)" },
+];
+$("#photoIn").addEventListener("change", async e => {
+  const f = e.target.files?.[0]; e.target.value = "";
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  try { const im = await loadImage(url); startMake({ photo: im }); }
+  catch (err) { toast("この写真は読み込めませんでした"); }
+  finally { setTimeout(() => URL.revokeObjectURL(url), 5000); }
+});
+function startMake({ photo, stage }) {
+  mk = { photo, opts: { ...DEFAULT_OPTS, ...(stage?.opts || {}) }, tool: SOLID, undo: [], cleared: null, id: stage?.id || null, name: stage?.name || "", fixedCrop: !!stage, from: stage?.from || "mine", author: stage?.author || null };
+  refit();
+  if (stage) { mk.tiles = Uint8Array.from(stage.tiles); mk.start = { ...stage.start }; mk.goal = { ...stage.goal }; mk.edited = true; mk.cleared = stage.best || null; }
+  else regen();
+  show("make"); syncPanel(); drawMake();
+}
+function refit() {
+  const fit = canvasOf(IMG_W, IMG_H), ctx = fit.getContext("2d"), im = mk.photo, f = mk.opts.focus / 100;
+  const s = Math.max(IMG_W / im.width, IMG_H / im.height), dw = im.width * s, dh = im.height * s;
+  ctx.drawImage(im, (IMG_W - dw) * f, (IMG_H - dh) * f, dw, dh);
+  mk.fit = fit; mk.imgEl = fit;
+  const small = canvasOf(COLS * 8, ROWS * 8), sx = small.getContext("2d", { willReadFrequently: true });
+  sx.drawImage(fit, 0, 0, small.width, small.height);
+  mk.feat = cellFeatures(sx.getImageData(0, 0, small.width, small.height).data, small.width, small.height);
+}
+function regen() { const r = buildTiles(mk.feat, mk.opts); mk.tiles = r.tiles; mk.start = r.start; mk.goal = r.goal; mk.edited = false; mk.cleared = null; }
+function syncPanel() {
+  document.querySelectorAll("[data-opt]").forEach(el => { const k = el.dataset.opt; if (el.type === "checkbox") el.checked = mk.opts[k]; else el.value = mk.opts[k]; });
+  const im = mk.photo, cropped = Math.abs(im.width / im.height - COLS / ROWS) > 0.02;
+  $("#focusRule").hidden = mk.fixedCrop || !cropped;
+  $("#autoGroup").classList.toggle("locked", mk.edited);
+  $("#lockNote").hidden = !mk.edited;
+  $("#tools").innerHTML = TOOLS.map((t, i) => `<button class="tool ${mk.tool === t.k ? "on" : ""}" data-tool="${i}"><i style="background:${t.sw}"></i>${t.label}</button>`).join("");
+}
+function drawMake() { const cv = $("#mk"); paintStage(cv, { tiles: mk.tiles, start: mk.start, goal: mk.goal, imgEl: mk.imgEl }, cv.parentElement.clientWidth * DPR(), true); }
+document.addEventListener("input", e => {
+  const k = e.target.dataset?.opt; if (!k || !mk) return;
+  mk.opts[k] = e.target.type === "checkbox" ? e.target.checked : +e.target.value;
+  if (k === "focus") refit();
+  regen(); drawMake();
+});
+// 指で描く（ドラッグの途中のマスも埋める）
+(() => {
+  const cv = $("#mk"); let last = null;
+  const cellOf = e => { const r = cv.getBoundingClientRect(); return { c: clamp(Math.floor((e.clientX - r.left) / r.width * COLS), 0, COLS - 1), r: clamp(Math.floor((e.clientY - r.top) / r.height * ROWS), 0, ROWS - 1) }; };
+  const paint = (p) => {
+    const tool = mk.tool;
+    if (tool === "start" || tool === "goal") { if (p.r < 1) p.r = 1; mk[tool] = p; normalize(mk.tiles, mk[tool]); return; }
+    mk.tiles[p.r * COLS + p.c] = tool;
+  };
+  cv.addEventListener("pointerdown", e => {
+    if (!mk) return; e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    mk.undo.push({ tiles: mk.tiles.slice(), start: { ...mk.start }, goal: { ...mk.goal } }); if (mk.undo.length > 40) mk.undo.shift();
+    last = cellOf(e); paint({ ...last }); touched();
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!mk || !last) return;
+    const p = cellOf(e), n = Math.max(Math.abs(p.c - last.c), Math.abs(p.r - last.r));
+    if (!n) return;
+    if (mk.tool === "start" || mk.tool === "goal") paint(p);
+    else for (let i = 1; i <= n; i++) paint({ c: Math.round(last.c + (p.c - last.c) * i / n), r: Math.round(last.r + (p.r - last.r) * i / n) });
+    last = p; drawMake();
+  });
+  const end = () => { if (last) { last = null; normalize(mk.tiles, mk.start, mk.goal); drawMake(); } };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  function touched() { const was = mk.edited; mk.edited = true; mk.cleared = null; if (!was) syncPanel(); drawMake(); }
+})();
+function makeStage() { return { id: mk.id, name: mk.name, tiles: mk.tiles, start: mk.start, goal: mk.goal, imgEl: mk.imgEl, opts: mk.opts }; }
+async function saveMade(name) {
+  const img = mk.fit.toDataURL("image/jpeg", 0.78);
+  const rec = { id: mk.id || uid(), name: name || defaultName(), at: Date.now(), img, tiles: tilesToStr(mk.tiles), start: mk.start, goal: mk.goal, opts: mk.opts, best: mk.cleared, author: mk.author, from: mk.from };
+  const i = stages.findIndex(s => s.id === rec.id);
+  if (i >= 0) stages[i] = rec; else stages.unshift(rec);
+  if (!saveStages()) return false;
+  mk = null; return true;
+}
+const defaultName = () => { const d = new Date(); return `コース ${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`; };
+
+// ---------- マイコース ----------
+function renderStages() {
+  const g = $("#stageGrid");
+  if (!stages.length) { g.innerHTML = `<div class="empty">まだコースがありません。トップの「写真でコースを作る」から作るか、友だちにリンクをもらってください。</div>`; return; }
+  g.innerHTML = stages.map((s, i) => `<div class="scard">
+      <canvas data-thumb="${i}"></canvas>
+      <div class="meta"><span class="name">${esc(s.name)}</span>${s.from === "shared" ? `<span class="tag">もらった</span>` : ""}</div>
+      <div class="meta"><span class="note">ベスト <span class="time">${fmt(s.best?.ms)}</span></span>${s.author ? `<span class="note">作者 <span class="time">${fmt(s.author.ms)}</span></span>` : ""}</div>
+      <div class="btns"><button class="btn sm primary" data-act="play" data-i="${i}">▶ 走る</button><button class="btn sm" data-act="share" data-i="${i}">送る</button><button class="btn sm quiet" data-act="edit" data-i="${i}">直す</button><button class="btn sm quiet" data-act="del" data-i="${i}">消す</button></div>
+    </div>`).join("");
+  g.querySelectorAll("[data-thumb]").forEach(async cv => { const st = await hydrate(stages[+cv.dataset.thumb]); paintStage(cv, st, cv.clientWidth * DPR() || 500); });
+}
+function ghostsFor(s) {
+  const gs = [];
+  if (s.best?.ghost?.length) gs.push({ data: s.best.ghost, ms: s.best.ms, color: "#9aa0a6", label: "ベスト" });
+  if (s.author?.ghost?.length) gs.push({ data: s.author.ghost, ms: s.author.ms, color: "#2f6fed", label: "作者" });
+  return gs;
+}
+
+// ---------- 共有リンク（サーバーなし：写真・マス・作者のタイムとゴーストを URL に入れる） ----------
+const b64url = bytes => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+const unb64url = str => { const s = atob(str.replace(/-/g, "+").replace(/_/g, "/")); const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; };
+const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+async function shrinkImg(src, w, h, q) { const im = await loadImage(src), c = canvasOf(w, h); c.getContext("2d").drawImage(im, 0, 0, w, h); return c.toDataURL("image/jpeg", q); }
+async function shareUrl(s) {
+  const rec = s.best || s.author;
+  const payload = { v: 1, n: s.name, t: s.tiles, s: [s.start.c, s.start.r], g: [s.goal.c, s.goal.r], i: (await shrinkImg(s.img, 320, 176, 0.6)).split(",")[1], ms: rec?.ms ?? null, gh: rec?.ghost ?? null };
+  const raw = new TextEncoder().encode(JSON.stringify(payload));
+  let tag = "r", body = raw;
+  if (window.CompressionStream) { try { body = await pipe(raw, new CompressionStream("deflate")); tag = "z"; } catch (e) { body = raw; tag = "r"; } }
+  return location.origin + location.pathname + "#s=" + tag + b64url(body);
+}
+async function readShare(hash) {
+  const str = hash.slice(3), tag = str[0], bytes = unb64url(str.slice(1));
+  const raw = tag === "z" ? await pipe(bytes, new DecompressionStream("deflate")) : bytes;
+  const p = JSON.parse(new TextDecoder().decode(raw));
+  if (p.v !== 1 || typeof p.t !== "string" || p.t.length !== COLS * ROWS) throw new Error("bad");
+  return { id: uid(), name: String(p.n || "もらったコース").slice(0, 40), at: Date.now(), img: "data:image/jpeg;base64," + p.i, tiles: p.t, start: { c: p.s[0], r: p.s[1] }, goal: { c: p.g[0], r: p.g[1] }, best: null, author: p.ms != null ? { ms: p.ms, ghost: p.gh || [] } : null, from: "shared" };
+}
+async function doShare(s) {
+  if (!s.best && !s.author) { toast("クリアしたコースだけ送れます"); return; }
+  let url;
+  try { url = await shareUrl(s); } catch (e) { toast("リンクを作れませんでした"); return; }
+  const text = `フォトアスレチック「${s.name}」${s.best ? `　私のタイムは ${fmt(s.best.ms)} 秒。勝てる？` : ""}`;
+  if (navigator.share) { try { await navigator.share({ title: "フォトアスレチック", text, url }); return; } catch (e) { if (e.name === "AbortError") return; } }
+  try { await navigator.clipboard.writeText(url); toast("リンクをコピーしました"); } catch (e) { prompt("このリンクを送ってください", url); }
+}
+let incoming = null;
+async function openIncoming() {
+  try { incoming = await readShare(location.hash); } catch (e) { toast("コースのリンクが壊れているようです"); show("home"); return; }
+  history.replaceState(null, "", location.pathname);
+  const st = await hydrate(incoming);
+  $("#importBody").innerHTML = `<div class="top"><h2>コースが届きました</h2><button class="btn sm quiet" data-go="home">トップへ</button></div>
+    <div class="stagebox preview"><canvas id="impCv"></canvas></div>
+    <div class="group"><h3>${esc(incoming.name)}</h3><p class="note">作者のタイム <span class="time">${fmt(incoming.author?.ms)}</span> 秒。走ると作者のゴースト（青）が一緒に走ります。</p>
+    <div class="btns"><button class="btn big primary" data-act="imp-play">▶ 勝負する</button><button class="btn" data-act="imp-save">マイコースに保存</button></div></div>`;
+  show("import");
+  paintStage($("#impCv"), st, $("#impCv").parentElement.clientWidth * DPR());
+}
+function saveIncoming() {
+  if (!incoming) return null;
+  const same = stages.find(s => s.img === incoming.img && s.tiles === incoming.tiles); // 同じリンクを2回開いても1つだけ
+  if (same) { incoming = same; return same; }
+  if (!stages.some(s => s.id === incoming.id)) { stages.unshift(incoming); if (!saveStages()) { stages.shift(); return null; } toast("マイコースに保存しました"); }
+  return incoming;
+}
+
+// ---------- 走る ----------
+let run = null;
+const keys = { l: false, r: false, j: false, jp: false };
+// o: { stage(遊べる形), mode: "test"|"solo"|"online", ghosts, onFinish }
+function startRun(o) {
+  run = { ...o, p: spawn(o.stage), t: 0, live: false, fin: null, rec: [], acc: 0, last: null, deaths: 0, cd: o.mode === "online" ? 3 : null, opp: null, oppShown: null, sendAt: 0 };
+  keys.l = keys.r = keys.j = keys.jp = false;
+  document.querySelectorAll(".ctl").forEach(b => b.classList.remove("on"));
+  $("#playOv").hidden = true;
+  show("play");
+  layoutPlay();
+  requestAnimationFrame(loop);
+}
+function layoutPlay() {
+  if (!run) return;
+  const cv = $("#gc"), d = DPR(), W = cv.clientWidth * d, H = cv.clientHeight * d;
+  cv.width = W; cv.height = H;
+  const cs = Math.min(W / COLS, H / ROWS);
+  run.cs = cs; run.ox = (W - cs * COLS) / 2; run.oy = (H - cs * ROWS) / 2;
+  run.layer = canvasOf(1, 1); paintStage(run.layer, run.stage, cs * COLS);
+}
+addEventListener("resize", () => { if (run) layoutPlay(); if (mk && !$("#make").hidden) drawMake(); });
+function loop(ts) {
+  if (!run) return;
+  const dt = run.last == null ? 0 : Math.min(0.05, (ts - run.last) / 1000); run.last = ts;
+  if (run.cd != null) { run.cd -= dt; if (run.cd <= 0) { run.cd = null; run.live = true; keys.jp = false; } }
+  else if (!run.live && !run.fin && (keys.l || keys.r || keys.jp)) run.live = true; // 1人のときは動いた瞬間にスタート
+  if (run.live && run.fin == null) {
+    run.acc += dt;
+    while (run.acc >= STEP && run.fin == null) {
+      run.acc -= STEP;
+      const ev = stepPlayer(run.p, run.stage, keys, STEP); keys.jp = false;
+      run.t += STEP;
+      if (run.rec.length / 2 < run.t * GHOST_HZ) run.rec.push(Math.round(run.p.x * 100), Math.round(run.p.y * 100));
+      if (ev === "die") run.deaths++;
+      if (ev === "goal") { run.fin = Math.round(run.t * 1000); finish(); }
+    }
+  }
+  if (run && run.mode === "online" && ts > run.sendAt) { run.sendAt = ts + 50; send({ t: "p", x: +run.p.x.toFixed(2), y: +run.p.y.toFixed(2), f: run.p.face, d: run.p.dead > 0 ? 1 : 0 }); }
+  if (run) { drawPlay(); hud(); requestAnimationFrame(loop); }
+}
+function drawPlay() {
+  const cv = $("#gc"), ctx = cv.getContext("2d"), { cs, ox, oy } = run;
+  ctx.fillStyle = "#14130f"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(run.layer, ox, oy);
+  const idx = Math.floor(run.t * GHOST_HZ);
+  for (const g of run.ghosts || []) {
+    const n = g.data.length / 2; if (!n) continue;
+    const i = Math.min(n - 1, idx), j = Math.max(0, i - 1);
+    const face = g.data[i * 2] < g.data[j * 2] ? -1 : 1;
+    drawRunner(ctx, ox + g.data[i * 2] / 100 * cs, oy + g.data[i * 2 + 1] / 100 * cs, cs, g.color, face, i === n - 1 ? .25 : .45, g.label);
+  }
+  if (run.opp) { // 相手は受け取った位置へなめらかに寄せる
+    const o = run.opp, s = run.oppShown || (run.oppShown = { x: o.x, y: o.y });
+    s.x += (o.x - s.x) * .35; s.y += (o.y - s.y) * .35;
+    if (!o.d) drawRunner(ctx, ox + s.x * cs, oy + s.y * cs, cs, "#a855f7", o.f || 1, .8, "相手");
+  }
+  const p = run.p;
+  if (p.dead > 0) { ctx.fillStyle = "rgba(255,59,48,.8)"; const k = (0.5 - p.dead) * 2; for (let a = 0; a < 6; a++) { ctx.beginPath(); ctx.arc(ox + (p.x + PH.W / 2 + Math.cos(a) * k) * cs, oy + (p.y + PH.H / 2 + Math.sin(a) * k) * cs, cs * .15 * (1 - k * .7), 0, 7); ctx.fill(); } }
+  else drawRunner(ctx, ox + p.x * cs, oy + p.y * cs, cs, "#ff4d2e", p.face, 1, run.mode === "online" ? "あなた" : null);
+}
+function hud() {
+  $("#hTime").textContent = fmt(run.fin ?? Math.round(run.t * 1000));
+  const info = $("#hInfo"), opp = $("#hOpp"), msg = $("#hMsg");
+  const target = run.mode === "online" ? null : (run.ghosts || []).map(g => g.ms != null ? `${g.label} ${fmt(g.ms)}` : "").filter(Boolean).join("　");
+  info.hidden = !target; if (target) info.textContent = target;
+  opp.hidden = run.mode !== "online" || run.oppFin === undefined;
+  if (!opp.hidden) opp.textContent = run.oppFin == null ? "相手はリタイア" : `相手ゴール ${fmt(run.oppFin)}`;
+  let m = "";
+  if (run.cd != null) m = run.cd > 0.05 ? String(Math.ceil(run.cd)) : "GO!";
+  else if (!run.live && run.mode !== "online") m = `動くとスタート<small>${matchMedia("(pointer: fine)").matches ? "←→ で移動・スペース/↑ でジャンプ" : "◀ ▶ で移動・JUMP でジャンプ"}</small>`;
+  else if (run.live && run.t < 0.6 && run.mode === "online") m = "GO!";
+  msg.hidden = !m; if (m) msg.innerHTML = m;
+}
+function finish() {
+  const ms = run.fin, ghost = run.rec.slice();
+  run.onFinish?.(ms, ghost);
+}
+function overlay(html) { const ov = $("#playOv"); ov.innerHTML = `<div class="sheet">${html}</div>`; ov.hidden = false; }
+
+// 操作：キーボード
+const KEYMAP = { ArrowLeft: "l", KeyA: "l", ArrowRight: "r", KeyD: "r", ArrowUp: "j", KeyW: "j", Space: "j", KeyZ: "j" };
+addEventListener("keydown", e => { const k = KEYMAP[e.code]; if (!k || !run) return; e.preventDefault(); if (k === "j" && !keys.j) keys.jp = true; keys[k] = true; });
+addEventListener("keyup", e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; });
+// 操作：画面のボタン（複数の指を同時に使える）
+(() => {
+  const held = new Map();
+  const set = (k, on) => { if (k === "j" && on && !keys.j) keys.jp = true; keys[k] = on; document.querySelector(`.ctl[data-k="${k}"]`).classList.toggle("on", on); };
+  document.querySelectorAll(".ctl").forEach(b => {
+    b.addEventListener("pointerdown", e => { e.preventDefault(); b.setPointerCapture?.(e.pointerId); held.set(e.pointerId, b.dataset.k); set(b.dataset.k, true); });
+    const up = e => { const k = held.get(e.pointerId); if (!k) return; held.delete(e.pointerId); if (![...held.values()].includes(k)) set(k, false); };
+    b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up); b.addEventListener("lostpointercapture", up);
+    b.addEventListener("contextmenu", e => e.preventDefault());
+  });
+})();
+
+// 1人で走る（テスト／マイコース／もらったコース）
+function runTest() {
+  startRun({ stage: makeStage(), mode: "test", ghosts: mk.cleared?.ghost ? [{ data: mk.cleared.ghost, ms: mk.cleared.ms, color: "#9aa0a6", label: "前回" }] : [], onFinish: (ms, ghost) => {
+    if (!mk.cleared || ms < mk.cleared.ms) mk.cleared = { ms, ghost };
+    overlay(`<div class="big">クリア！</div><div><span class="time">${fmt(ms)}</span> 秒</div>
+      <label class="note">コースの名前<input type="text" id="nameIn" maxlength="40" value="${esc(mk.name || defaultName())}"></label>
+      <div class="btns"><button class="btn primary" data-act="save-made">保存する</button><button class="btn" data-act="retest">もう一回</button><button class="btn quiet" data-act="back-make">直しに戻る</button></div>
+      <p class="note">保存するのは一番速いタイム（${fmt(mk.cleared.ms)} 秒）です。</p>`);
+  } });
+}
+async function runSaved(i) {
+  const s = stages[i], st = await hydrate(s);
+  startRun({ stage: st, mode: "solo", ghosts: ghostsFor(s), onFinish: (ms, ghost) => {
+    const prev = s.best?.ms, better = prev == null || ms < prev;
+    if (better) { s.best = { ms, ghost }; saveStages(); }
+    const vsA = s.author ? (ms < s.author.ms ? `作者に <b>${fmt(s.author.ms - ms)}</b> 秒勝ち！` : `作者まであと <b>${fmt(ms - s.author.ms)}</b> 秒`) : "";
+    overlay(`<div class="big">${better ? (prev == null ? "ゴール！" : "ベスト更新！") : "ゴール！"}</div><div><span class="time">${fmt(ms)}</span> 秒</div>
+      <p class="note">ベスト ${fmt(s.best.ms)} 秒　ミス ${run.deaths} 回<br>${vsA}</p>
+      <div class="btns"><button class="btn primary" data-act="replay" data-i="${i}">もう一回</button><button class="btn" data-act="share" data-i="${i}">送る</button><button class="btn quiet" data-go="stages">マイコースへ</button></div>`);
+  } });
+}
+
+// ---------- オンライン対戦（PeerJS：ブラウザ同士で直接つなぐ。部屋コードは4文字） ----------
+const PEER_PREFIX = "photoathletic-";
+let net = null; // { peer, conn, host, code, open, stage(遊べる形), stageRaw, chooser, meReady, oppReady, state }
+function genCode() { const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = ""; for (let i = 0; i < 4; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
+function netClose(msg) { try { net?.conn?.close(); net?.peer?.destroy(); } catch (e) {} net = null; if (msg) toast(msg); }
+function hostRoom() {
+  if (!window.Peer) { toast("通信の準備ができていません。電波を確認してください"); return; }
+  netClose(); const code = genCode();
+  net = { host: true, code, peer: new Peer(PEER_PREFIX + code), meReady: false, oppReady: false };
+  net.peer.on("open", () => renderOnline());
+  net.peer.on("connection", c => { if (net.conn) { c.close(); return; } bind(c); });
+  net.peer.on("error", e => { if (e.type === "unavailable-id") hostRoom(); else { netClose("通信エラー：" + e.type); renderOnline(); } });
+  renderOnline();
+}
+function joinRoom(code) {
+  if (!window.Peer) { toast("通信の準備ができていません。電波を確認してください"); return; }
+  code = code.trim().toUpperCase(); if (code.length !== 4) { toast("4文字のコードを入れてください"); return; }
+  netClose(); net = { host: false, code, peer: new Peer(), meReady: false, oppReady: false };
+  net.peer.on("open", () => bind(net.peer.connect(PEER_PREFIX + code, { reliable: true })));
+  net.peer.on("error", e => { netClose(e.type === "peer-unavailable" ? "その部屋が見つかりません" : "通信エラー：" + e.type); renderOnline(); });
+  renderOnline();
+}
+function bind(c) {
+  net.conn = c;
+  c.on("open", () => { net.open = true; renderOnline(); });
+  c.on("data", onMsg);
+  c.on("close", () => { const wasPlaying = !!run; netClose("相手との接続が切れました"); if (wasPlaying || !$("#online").hidden) show("online"); });
+}
+function send(m) { try { if (net?.conn?.open) net.conn.send(m); } catch (e) {} }
+async function setNetStage(raw, chooser) {
+  net.stageRaw = raw; net.chooser = chooser; net.meReady = net.oppReady = false;
+  net.stage = await hydrate(raw);
+  renderOnline();
+}
+function onMsg(m) {
+  if (!net || !m || typeof m !== "object") return;
+  switch (m.t) {
+    case "stage": setNetStage({ id: uid(), name: String(m.s.name).slice(0, 40), img: m.s.img, tiles: m.s.tiles, start: m.s.start, goal: m.s.goal, best: null, author: m.s.author || null, from: "shared", at: Date.now() }, "opp"); break;
+    case "ready": net.oppReady = true; renderOnline(); maybeGo(); break;
+    case "go": startRace(); break;
+    case "p": if (run?.mode === "online") run.opp = m; break;
+    case "fin": if (run?.mode === "online") { run.oppFin = m.ms; raceResult(); } break;
+  }
+}
+function pickNetStage(i) {
+  const s = stages[i]; if (!s.best && !s.author) { toast("クリアしたコースだけ出せます"); return; }
+  const raw = { name: s.name, img: s.img, tiles: s.tiles, start: s.start, goal: s.goal, author: s.best || s.author };
+  send({ t: "stage", s: raw });
+  setNetStage({ ...s }, "me");
+}
+function setReady() { net.meReady = true; send({ t: "ready" }); renderOnline(); maybeGo(); }
+function maybeGo() { if (net?.host && net.meReady && net.oppReady && net.stage) { send({ t: "go" }); startRace(); } }
+function startRace() {
+  net.meReady = net.oppReady = false;
+  startRun({ stage: net.stage, mode: "online", ghosts: [], onFinish: (ms) => { send({ t: "fin", ms }); raceResult(); } });
+  run.oppFin = undefined;
+}
+function giveUp() { if (run?.mode === "online" && run.fin == null) { run.fin = -1; send({ t: "fin", ms: null }); raceResult(); } }
+function raceResult() {
+  if (!run || run.mode !== "online") return;
+  const me = run.fin === -1 ? null : run.fin, op = run.oppFin;
+  if (run.fin == null) return; // まだ走っている（相手がゴールしたことは上に出る）
+  if (op === undefined) { overlay(`<div class="big">${me == null ? "リタイア" : "ゴール！"}</div>${me != null ? `<div><span class="time">${fmt(me)}</span> 秒</div>` : ""}<p class="note">相手のゴールを待っています…</p>`); return; }
+  const win = me != null && (op == null || me < op), draw = me != null && me === op, both = me == null && op == null;
+  overlay(`<div class="big">${both ? "引き分け" : draw ? "引き分け" : win ? "あなたの勝ち！" : "相手の勝ち"}</div>
+    <p>あなた <span class="time">${me == null ? "リタイア" : fmt(me)}</span>${me == null ? "" : " 秒"}<br>相手 <span class="time">${op == null ? "リタイア" : fmt(op)}</span>${op == null ? "" : " 秒"}</p>
+    <div class="btns"><button class="btn primary" data-act="lobby">部屋に戻る</button></div>`);
+}
+function renderOnline() {
+  const b = $("#onlineBody");
+  const head = `<div class="top"><h2>オンライン対戦</h2><button class="btn sm quiet" data-act="net-leave">${net ? "部屋を出る" : "戻る"}</button></div>`;
+  if (!net) {
+    b.innerHTML = head + `<div class="menu">
+      <div class="group"><h3>部屋を作る</h3><p class="note">4文字のコードが出ます。相手に伝えてください。</p><button class="btn primary" data-act="host">部屋を作る</button></div>
+      <div class="group"><h3>部屋に入る</h3><div class="join"><input id="codeIn" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters"><button class="btn primary" data-act="join">入る</button></div></div>
+    </div><p class="note">同じコースを同時に走って、先にゴールした方の勝ち。どちらかが自分のコースを出せます（クリア済みのコースだけ）。</p>`;
+    return;
+  }
+  if (!net.open) {
+    b.innerHTML = head + (net.host ? `<div class="group"><p class="note">相手にこのコードを伝えてください</p><div class="code">${net.peer.id ? net.code : "…"}</div><p class="note">相手が入るのを待っています…</p></div>` : `<div class="group"><p class="note">部屋 ${esc(net.code)} につないでいます…</p></div>`);
+    return;
+  }
+  const mine = stages.map((s, i) => [s, i]).filter(([s]) => s.best || s.author);
+  b.innerHTML = head + `<div class="status"><span class="pill ok">相手とつながりました</span><span class="pill">部屋 ${esc(net.code)}</span></div>
+    ${net.stage ? `<div class="group"><h3>${esc(net.stage.name)}<span class="note">（${net.chooser === "me" ? "あなた" : "相手"}が出したコース）</span></h3>
+      <div class="lobby"><div class="stagebox"><canvas id="netCv"></canvas></div><div class="panel">
+      <div class="status"><span class="pill ${net.meReady ? "ok" : ""}">あなた ${net.meReady ? "準備OK" : "まだ"}</span><span class="pill ${net.oppReady ? "ok" : ""}">相手 ${net.oppReady ? "準備OK" : "まだ"}</span></div>
+      <div class="btns"><button class="btn big primary" data-act="ready" ${net.meReady ? "disabled" : ""}>準備OK</button>${net.chooser === "opp" && !stages.some(s => s.img === net.stageRaw.img) ? `<button class="btn" data-act="net-save">このコースを保存</button>` : ""}</div>
+      <p class="note">2人とも準備OKになると、3秒後にスタートします。</p></div></div></div>`
+      : `<div class="empty">どちらかがコースを出してください</div>`}
+    <h3>自分のコースを出す</h3>
+    ${mine.length ? `<div class="grid">${mine.map(([s, i]) => `<div class="scard"><canvas data-thumb="${i}"></canvas><div class="meta"><span class="name">${esc(s.name)}</span><span class="time">${fmt((s.best || s.author).ms)}</span></div><button class="btn sm" data-act="net-pick" data-i="${i}">このコースで勝負</button></div>`).join("")}</div>` : `<p class="note">クリア済みのコースがありません。</p>`}`;
+  if (net.stage) paintStage($("#netCv"), net.stage, $("#netCv").parentElement.clientWidth * DPR());
+  b.querySelectorAll("[data-thumb]").forEach(async cv => { const st = await hydrate(stages[+cv.dataset.thumb]); paintStage(cv, st, cv.clientWidth * DPR() || 500); });
+}
+
+// ---------- ボタン ----------
+document.addEventListener("click", async e => {
+  const el = e.target.closest("[data-act],[data-go],[data-tool]"); if (!el) return;
+  if (el.dataset.go) { show(el.dataset.go); return; }
+  if (el.dataset.tool) { mk.tool = TOOLS[+el.dataset.tool].k; syncPanel(); return; }
+  const i = el.dataset.i != null ? +el.dataset.i : null;
+  switch (el.dataset.act) {
+    case "make-back": if (!mk.edited || confirm("作りかけのコースを捨てますか？")) { mk = null; show("home"); } break;
+    case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); } break;
+    case "undo": { const u = mk.undo.pop(); if (u) { Object.assign(mk, u); mk.cleared = null; drawMake(); } break; }
+    case "test": runTest(); break;
+    case "retest": runTest(); break;
+    case "back-make": show("make"); syncPanel(); drawMake(); break;
+    case "save-made": { const name = $("#nameIn").value.trim(); if (await saveMade(name)) { toast("保存しました"); show("stages"); } break; }
+    case "play": case "replay": runSaved(i); break;
+    case "share": doShare(stages[i]); break;
+    case "edit": { const s = stages[i]; try { const im = await loadImage(s.img); startMake({ photo: im, stage: { ...s, tiles: strToTiles(s.tiles) } }); } catch (err) { toast("開けませんでした"); } break; }
+    case "del": if (confirm(`「${stages[i].name}」を消しますか？`)) { stages.splice(i, 1); saveStages(); renderStages(); } break;
+    case "exit":
+      if (run?.mode === "online") { if (run.fin == null && !confirm("リタイアしますか？")) break; giveUp(); show("online"); }
+      else if (run?.mode === "test") { show("make"); syncPanel(); drawMake(); }
+      else if (run?.stage && stages.some(s => s.id === run.stage.id)) show("stages");
+      else show(incoming ? "import" : "home");
+      break;
+    case "imp-play": { const s = saveIncoming() ? stages.find(x => x.id === incoming.id) : null; if (s) runSaved(stages.indexOf(s)); break; }
+    case "imp-save": if (saveIncoming()) show("stages"); break;
+    case "host": hostRoom(); break;
+    case "join": joinRoom($("#codeIn").value); break;
+    case "net-leave": if (net) { netClose(); renderOnline(); } else show("home"); break;
+    case "net-pick": pickNetStage(i); break;
+    case "ready": setReady(); break;
+    case "net-save": { const raw = { ...net.stageRaw, id: uid() }; stages.unshift(raw); if (saveStages()) { toast("マイコースに保存しました"); net.stageRaw.img = raw.img; renderOnline(); } else stages.shift(); break; }
+    case "lobby": show("online"); break;
+  }
+});
+document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "codeIn") joinRoom(e.target.value); });
+
+// 起動：リンクでコースが届いていれば開く
+if (location.hash.startsWith("#s=")) openIncoming(); else show("home");
+addEventListener("hashchange", () => { if (location.hash.startsWith("#s=")) openIncoming(); });
+
+// オフラインでも開けるように（https で sw.js がある場所だけ）
+if ("serviceWorker" in navigator && location.protocol === "https:") addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+</script>
