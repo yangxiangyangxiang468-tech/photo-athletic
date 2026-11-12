@@ -3,10 +3,12 @@
   "short_name": "フォトアスレチック",
   "description": "写真を撮ると、それがアスレチックのコースになる",
   "lang": "ja",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "landscape",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
   "background_color": "#f4efe4",
   "theme_color": "#f4efe4",
   "icons": [

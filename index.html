@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ja">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>フォトアスレチック</title>
 <meta name="theme-color" content="#f4efe4">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -35,7 +35,11 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; min-height: 100%; }
+html, body { margin: 0; min-height: 100%; overscroll-behavior: none; }
+/* アプリらしく：ダブルタップ拡大・長押しメニュー・文字選択を止める（入力欄は除く） */
+html { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
+body { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+input, textarea { user-select: text; -webkit-user-select: text; }
 body {
   background: var(--paper);
   color: var(--ink);
@@ -83,6 +87,11 @@ h3 { margin: 0; font-size: 16px; }
 .pola { background: var(--card); border: 2px solid var(--ink); padding: 6px 6px 22px; box-shadow: var(--shadow); flex: none; }
 .pola:nth-child(odd) { transform: rotate(-3deg); }
 .pola:nth-child(even) { transform: rotate(2.5deg); }
+.install { display: flex; gap: 12px; align-items: center; background: var(--card); border: 2px solid var(--ink); border-radius: 14px; padding: 12px 14px; box-shadow: var(--shadow); }
+.install .ico { font-size: 28px; line-height: 1; }
+.install div { flex: 1; display: grid; gap: 2px; font-size: 13.5px; }
+.install b { font-size: 15px; }
+.install .x { border: 0; background: none; font-size: 18px; color: var(--muted); padding: 4px 6px; cursor: pointer; }
 .how { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
 .how div { border: 2px dashed var(--line); border-radius: 14px; padding: 12px 14px; font-size: 13.5px; }
 .how b { display: block; font-family: var(--f-display); font-weight: 400; font-size: 18px; color: var(--track); }
@@ -173,6 +182,7 @@ h3 { margin: 0; font-size: 16px; }
       <button class="btn big" data-go="online">オンライン対戦<small>部屋コードで友だちと同時に走る</small></button>
     </div>
     <input type="file" id="photoIn" accept="image/*" class="vh">
+    <div class="install" id="installBox" hidden></div>
     <div class="how">
       <div><b>1 撮る</b>写真の「物のふち」は薄い足場、「暗い所」は地面、「赤・青・緑」はトゲ・水・ジャンプ台になる。</div>
       <div><b>2 整える</b>どれを使うか・どれくらい使うかを調整して、足りない足場は指で描き足す。</div>
@@ -408,6 +418,7 @@ function show(name) {
   document.querySelectorAll(".screen").forEach(s => s.hidden = s.id !== name);
   document.body.classList.toggle("playing", name === "play");
   if (name !== "play") run = null;
+  appFeel(name);
   if (name === "stages") renderStages();
   if (name === "online") renderOnline();
   if (name === "home") $("#stageCount").textContent = stages.length ? `${stages.length}コース` : "作ったコース・もらったコース";
@@ -669,7 +680,7 @@ addEventListener("resize", () => { if (run) layoutPlay(); if (mk && !$("#make").
 function loop(ts) {
   if (!run) return;
   const dt = run.last == null ? 0 : Math.min(0.05, (ts - run.last) / 1000); run.last = ts;
-  if (run.cd != null) { run.cd -= dt; if (run.cd <= 0) { run.cd = null; run.live = true; keys.jp = false; } }
+  if (run.cd != null) { run.cd -= dt; if (run.cd <= 0) { run.cd = null; run.live = true; keys.jp = false; buzz(60); } }
   else if (!run.live && !run.fin && (keys.l || keys.r || keys.jp)) run.live = true; // 1人のときは動いた瞬間にスタート
   if (run.live && run.fin == null) {
     run.acc += dt;
@@ -678,8 +689,8 @@ function loop(ts) {
       const ev = stepPlayer(run.p, run.stage, keys, STEP); keys.jp = false;
       run.t += STEP;
       if (run.rec.length / 2 < run.t * GHOST_HZ) run.rec.push(Math.round(run.p.x * 100), Math.round(run.p.y * 100));
-      if (ev === "die") run.deaths++;
-      if (ev === "goal") { run.fin = Math.round(run.t * 1000); finish(); }
+      if (ev === "die") { run.deaths++; buzz(35); }
+      if (ev === "goal") { run.fin = Math.round(run.t * 1000); buzz([40, 60, 90]); finish(); }
     }
   }
   if (run && run.mode === "online" && ts > run.sendAt) { run.sendAt = ts + 50; send({ t: "p", x: +run.p.x.toFixed(2), y: +run.p.y.toFixed(2), f: run.p.face, d: run.p.dead > 0 ? 1 : 0 }); }
@@ -894,6 +905,63 @@ document.addEventListener("click", async e => {
   }
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "codeIn") joinRoom(e.target.value); });
+
+// ---------- アプリらしい手触り ----------
+function buzz(p) { try { navigator.vibrate?.(p); } catch (e) {} } // Android だけ震える（iPhone は非対応）
+let wake = null; // プレイ中・対戦の部屋では画面を消さない
+async function keepAwake(on) {
+  try {
+    if (on && !wake && navigator.wakeLock && document.visibilityState === "visible") { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => wake = null); }
+    else if (!on && wake) { const w = wake; wake = null; await w.release(); }
+  } catch (e) {}
+}
+const curScreen = () => [...document.querySelectorAll(".screen")].find(s => !s.hidden)?.id;
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && ["play", "online"].includes(curScreen())) keepAwake(true); });
+// スマホの「戻る」：ホーム以外の画面では履歴に1つだけ目印を積み、戻るでその画面の「戻る/やめる」ボタンを押したことにする
+let ignorePop = false;
+function appFeel(name) {
+  keepAwake(name === "play" || name === "online");
+  try { if (name === "play") screen.orientation?.lock?.("landscape").catch(() => {}); else screen.orientation?.unlock?.(); } catch (e) {}
+  if (name === "home") { if (history.state?.pa) { ignorePop = true; history.back(); } }
+  else if (!history.state?.pa) history.pushState({ pa: 1 }, "");
+}
+addEventListener("popstate", () => {
+  if (ignorePop) { ignorePop = false; return; }
+  const cur = curScreen(); if (cur === "home") return;
+  const act = { play: "exit", make: "make-back", online: "net-leave" }[cur];
+  if (act) document.querySelector(`#${cur} [data-act="${act}"]`)?.click(); else show("home");
+  if (curScreen() !== "home" && !history.state?.pa) history.pushState({ pa: 1 }, ""); // やめるのを取り消したとき
+});
+document.addEventListener("gesturestart", e => e.preventDefault()); // iPhone のピンチ拡大を止める
+
+// ホーム画面に入れる案内
+const isStandalone = () => matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches || navigator.standalone === true;
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const inApp = /Line\/|Instagram|FBAN|FBAV/.test(navigator.userAgent);
+let installEvt = null;
+function renderInstall() {
+  const box = $("#installBox");
+  if (isStandalone() || load("pa_install_hide", false)) { box.hidden = true; return; }
+  let html = "";
+  const x = `<button class="x" data-act="install-hide" aria-label="閉じる">✕</button>`;
+  if (inApp) {
+    const url = location.origin + location.pathname + "?openExternalBrowser=1" + location.hash;
+    html = `<span class="ico">🧭</span><div><b>ブラウザで開くとアプリにできます</b>このアプリの中ではホーム画面に入れられません。<a href="${esc(url)}" target="_blank" rel="noopener">ブラウザで開く</a></div>${x}`;
+  } else if (installEvt) {
+    html = `<span class="ico">📲</span><div><b>ホーム画面に入れる</b>アプリのように全画面で遊べます</div><button class="btn sm primary" data-act="install">入れる</button>${x}`;
+  } else if (isIOS) {
+    html = `<span class="ico">📲</span><div><b>ホーム画面に入れると、アプリのように遊べます</b>共有ボタン（□に↑）→「ホーム画面に追加」</div>${x}`;
+  }
+  box.innerHTML = html; box.hidden = !html;
+}
+addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; renderInstall(); });
+addEventListener("appinstalled", () => { installEvt = null; renderInstall(); toast("ホーム画面に入れました"); });
+document.addEventListener("click", async e => {
+  const a = e.target.closest("[data-act]")?.dataset.act;
+  if (a === "install" && installEvt) { const ev = installEvt; installEvt = null; ev.prompt(); try { await ev.userChoice; } catch (err) {} renderInstall(); }
+  if (a === "install-hide") { store("pa_install_hide", true); renderInstall(); }
+});
+renderInstall();
 
 // 起動：リンクでコースが届いていれば開く
 if (location.hash.startsWith("#s=")) openIncoming(); else show("home");
