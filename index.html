@@ -212,7 +212,7 @@ h3 { margin: 0; font-size: 16px; }
           <div class="rule" id="focusRule"><label>写真の位置</label><input type="range" min="0" max="100" data-opt="focus"><small>写真の上下（左右）どこをコースに使うか</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="ai"> AI でモノを見つける → 地面</label><small id="aiNote"></small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 空や壁 ↔ モノを見分ける → 地面</label><input type="range" min="10" max="100" data-opt="objAmt"><small>空や壁の前にある建物・モノに乗れる。見分けの強さ</small></div>
-          <div class="rule"><label class="chk"><input type="checkbox" data-opt="edge"> 物のふち → 薄い足場</label><input type="range" min="2" max="30" data-opt="edgeAmt"><small>下からすり抜けて乗れる足場</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="edge"> 物のふち → 薄い足場（最初はオフ）</label><input type="range" min="2" max="30" data-opt="edgeAmt"><small>下からすり抜けて乗れる足場</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="dark"> 暗い所 → 地面</label><input type="range" min="0" max="45" data-opt="darkAmt"><small>紙にペンで描いて撮ると自分でコースが描ける</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="color"> 色 → しかけ</label><input type="range" min="0" max="100" data-opt="colorAmt"><small>赤 = トゲ　青 = 水　緑 = ジャンプ台</small></div>
         </div>
@@ -275,7 +275,7 @@ const COLS = 40, ROWS = 22;               // コースは 40×22 マス（横長
 const E = 0, SOLID = 1, PLAT = 2, SPIKE = 3, WATER = 4, BOUNCE = 5;
 // 写真から作った地面・薄い足場。はたらきは SOLID・PLAT と同じだが、遊ぶ画面では何も描かない（写真のまま、写っているモノに乗る）
 const PSOLID = 6, PPLAT = 7;
-const DEFAULT_OPTS = { focus: 50, ai: true, obj: true, objAmt: 50, edge: true, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
+const DEFAULT_OPTS = { focus: 50, ai: true, obj: true, objAmt: 50, edge: false, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
 // 動きの数値（単位はマス・秒）。ジャンプは約3.4マス、ジャンプ台は約7マス
 const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.12, BUF: 0.15 }; // COYOTE: 落ちた直後でも跳べる時間、BUF: 着地の少し前に押したジャンプも効く時間
 const STEP = 1 / 120;
@@ -404,7 +404,7 @@ function buildTiles(f, o, det = null) {
       while (c < COLS) {
         if (!cand[r * COLS + c]) { c++; continue; }
         let e = c; while (e < COLS && cand[r * COLS + e]) e++;
-        if (e - c >= 2) for (let x = c; x < e; x++) t[r * COLS + x] = PLAT;
+        if (e - c >= 2) for (let x = c; x < e; x++) t[r * COLS + x] = PPLAT; // 写真のふちなので、遊ぶ画面では描かない
         c = e;
       }
     }
@@ -440,10 +440,16 @@ function findSpot(t, left) {
     const c = left ? k : COLS - 1 - k;
     for (let r = ROWS - 2; r >= 2; r--) if (standable(t[(r + 1) * COLS + c]) && t[r * COLS + c] === E && t[(r - 1) * COLS + c] === E && open(c, r)) return { c, r };
   }
-  // 無ければ、空の見える所（上から見て最初に何かある所の上）に3マスの台を作る（水やトゲの上でも）
-  const c = left ? 2 : COLS - 3;
-  let r = 3; while (r < ROWS - 1 && [c - 1, c, c + 1].every(x => t[r * COLS + x] === E)) r++;
-  r = Math.max(3, Math.min(ROWS - 1, r));
+  // 無ければ台を作る。写真のモノの上の面と同じくらいの高さに置く（低い所に置くと、モノの横に登るための足場がたくさん要る）
+  const c = left ? 2 : COLS - 3, tops = [];
+  for (let x = 0; x < COLS; x++) for (let y = 2; y < ROWS; y++) if (standable(t[y * COLS + x])) { if (!standable(t[(y - 1) * COLS + x])) tops.push(y); break; }
+  tops.sort((a, b) => a - b);
+  let want = tops.length ? tops[Math.floor(tops.length / 2)] : ROWS - 3; // 上の面の高さの真ん中
+  want = Math.max(4, Math.min(ROWS - 2, want));
+  // その高さで、台の3マスと上の2マスが空いている所（無ければ下へずらす。それでも無ければ上から見て最初に何かある所の上）
+  const freeAt = r => [c - 1, c, c + 1].every(x => t[r * COLS + x] === E && t[(r - 1) * COLS + x] === E && t[(r - 2) * COLS + x] === E);
+  let r = -1; for (let y = want; y < ROWS; y++) if (freeAt(y)) { r = y; break; }
+  if (r < 0) { r = 3; while (r < ROWS - 1 && [c - 1, c, c + 1].every(x => t[r * COLS + x] === E)) r++; r = Math.max(3, Math.min(ROWS - 1, r)); }
   for (let dc = -1; dc <= 1; dc++) t[r * COLS + c + dc] = SOLID;
   return { c, r: r - 1 };
 }
