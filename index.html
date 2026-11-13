@@ -273,6 +273,8 @@ h3 { margin: 0; font-size: 16px; }
 // ==ENGINE START== （ここから ==ENGINE END== までは画面に触らない処理。node でテストできる）
 const COLS = 40, ROWS = 22;               // コースは 40×22 マス（横長 16:9 くらい）
 const E = 0, SOLID = 1, PLAT = 2, SPIKE = 3, WATER = 4, BOUNCE = 5;
+// 写真から作った地面・薄い足場。はたらきは SOLID・PLAT と同じだが、遊ぶ画面では何も描かない（写真のまま、写っているモノに乗る）
+const PSOLID = 6, PPLAT = 7;
 const DEFAULT_OPTS = { focus: 50, ai: true, obj: true, objAmt: 50, edge: true, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
 // 動きの数値（単位はマス・秒）。ジャンプは約3.4マス、ジャンプ台は約7マス
 const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.12, BUF: 0.15 }; // COYOTE: 落ちた直後でも跳べる時間、BUF: 着地の少し前に押したジャンプも効く時間
@@ -307,7 +309,8 @@ function cellFeatures(d, W, H) {
   return { lum, edge, tex, rgb };
 }
 
-const standable = v => v === SOLID || v === PLAT || v === BOUNCE;
+const standable = v => v === SOLID || v === PLAT || v === BOUNCE || v === PSOLID || v === PPLAT;
+const isPlat = v => v === PLAT || v === PPLAT;
 // 空や壁などの「うしろ」を写真の上から塗り広げて見つけ、残った所を建物・モノとみなす（1 = モノ）
 function objectMask(f, amt) {
   const N = COLS * ROWS, s = amt / 100, bg = new Uint8Array(N), q = [];
@@ -342,13 +345,31 @@ function objectMask(f, amt) {
 }
 
 // 写真の特徴と設定からマスを決める。優先順位：色のしかけ ＞ 暗い所の地面 ＞ 建物・モノ ＞ ふちの足場
+// AI の四角の中から、まわり（四角のすぐ外）と同じ色で続いている所＝うしろを削って、モノの形に近づける
+function refineBox(f, b) {
+  const N = COLS * ROWS, c0 = Math.max(0, b.c0), r0 = Math.max(0, b.r0), c1 = Math.min(COLS - 1, b.c1), r1 = Math.min(ROWS - 1, b.r1);
+  const box = new Uint8Array(N), bg = new Uint8Array(N), q = [];
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) box[r * COLS + c] = 1;
+  const dist = (a, b2) => Math.hypot(f.rgb[a * 3] - f.rgb[b2 * 3], f.rgb[a * 3 + 1] - f.rgb[b2 * 3 + 1], f.rgb[a * 3 + 2] - f.rgb[b2 * 3 + 2]);
+  const smooth = i => !f.tex || f.tex[i] < 0.09;
+  const step = (from, j) => { if (!box[j] || bg[j]) return; if (smooth(j) && dist(from, j) < 0.07) { bg[j] = 1; q.push(j); } };
+  // 四角のすぐ外のマスから、内側へ塗り広げる（写真の端に接している辺は、外が無いので広げない）
+  for (let r = r0; r <= r1; r++) { if (c0 > 0) step(r * COLS + c0 - 1, r * COLS + c0); if (c1 < COLS - 1) step(r * COLS + c1 + 1, r * COLS + c1); }
+  for (let c = c0; c <= c1; c++) { if (r0 > 0) step((r0 - 1) * COLS + c, r0 * COLS + c); if (r1 < ROWS - 1) step((r1 + 1) * COLS + c, r1 * COLS + c); }
+  for (let h = 0; h < q.length; h++) { const i = q[h], r = (i / COLS) | 0, c = i % COLS;
+    if (c > 0) step(i, i - 1); if (c < COLS - 1) step(i, i + 1); if (r > 0) step(i, i - COLS); if (r < ROWS - 1) step(i, i + COLS); }
+  let n = 0, k = 0; for (let i = 0; i < N; i++) if (box[i]) { n++; if (!bg[i]) k++; }
+  if (k < n * 0.3) return box; // 削りすぎ（モノと背景が同じ色）のときは四角のまま
+  for (let i = 0; i < N; i++) if (bg[i]) box[i] = 0;
+  return box;
+}
 // det: AI が見つけたモノの範囲（マス単位 { c0, r0, c1, r1 }、両端をふくむ）。見つけたモノは写っている範囲まるごと地面にする
 function buildTiles(f, o, det = null) {
   const N = COLS * ROWS, t = new Uint8Array(N);
   let m = o.obj && o.objAmt > 0 ? objectMask(f, o.objAmt) : null;
   if (o.ai && det?.length) {
     if (!m) m = new Uint8Array(N);
-    for (const b of det) for (let r = Math.max(0, b.r0); r <= Math.min(ROWS - 1, b.r1); r++) for (let c = Math.max(0, b.c0); c <= Math.min(COLS - 1, b.c1); c++) m[r * COLS + c] = 1;
+    for (const b of det) { const k = refineBox(f, b); for (let i = 0; i < N; i++) if (k[i]) m[i] = 1; }
   }
   if (m) {
     // 建物・モノそのものを地面（乗れて、通り抜けられないかたまり）にする。屋根・机・棚の上を歩ける
@@ -359,7 +380,7 @@ function buildTiles(f, o, det = null) {
     const at2 = (r, c) => r >= 0 && r < ROWS && m2[r * COLS + c];
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
       if (!m2[r * COLS + c]) continue;
-      t[r * COLS + c] = r > 0 && r < ROWS - 1 && !at2(r - 1, c) && !at2(r + 1, c) ? PLAT : SOLID;
+      t[r * COLS + c] = r > 0 && r < ROWS - 1 && !at2(r - 1, c) && !at2(r + 1, c) ? PPLAT : PSOLID;
     }
   }
   if (o.dark && o.darkAmt > 0) {
@@ -370,12 +391,12 @@ function buildTiles(f, o, det = null) {
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
       let n = 0;
       for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS) n += raw[rr * COLS + cc]; }
-      if (n >= 5 || (n >= 4 && raw[r * COLS + c])) t[r * COLS + c] = SOLID;
+      if (n >= 5 || (n >= 4 && raw[r * COLS + c])) t[r * COLS + c] = PSOLID;
     }
   }
   if (o.edge && o.edgeAmt > 0) {
     const thr = Math.max(1, percentile(f.edge, 1 - o.edgeAmt / 100)), cand = new Uint8Array(N);
-    for (let i = 0; i < N; i++) if (t[i] === E && f.edge[i] >= thr && !(i >= COLS && t[i - COLS] === PLAT)) cand[i] = 1;
+    for (let i = 0; i < N; i++) if (t[i] === E && f.edge[i] >= thr && !(i >= COLS && isPlat(t[i - COLS]))) cand[i] = 1;
     // 縦に重なったふちは一番上だけ、横に2マス以上続くものだけ足場にする
     for (let i = N - 1; i >= COLS; i--) if (cand[i] && cand[i - COLS]) cand[i] = 0;
     for (let r = 0; r < ROWS; r++) {
@@ -435,7 +456,7 @@ function normalize(t, ...spots) {
 }
 
 function tileAt(t, c, r) { if (c < 0 || c >= COLS || r < 0) return SOLID; if (r >= ROWS) return E; return t[r * COLS + c]; }
-const isSolid = v => v === SOLID || v === BOUNCE;
+const isSolid = v => v === SOLID || v === BOUNCE || v === PSOLID;
 // at: 出てくる場所（チェックポイント）。無ければスタート
 function spawn(st, at = st.start) { return { x: at.c + 0.5 - PH.W / 2, y: at.r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: false, coyote: 0, buf: 0, cut: false, face: 1, dead: 0, water: false }; }
 // 1コマ進める。inp = { l, r, j: 押している, jp: 今押した }。戻り値 "die" | "goal" | "cp"（新しいチェックポイントに触れた） | null
@@ -466,7 +487,7 @@ function stepPlayer(p, st, inp, dt) {
   { const c0 = Math.floor(p.x + 1e-6), c1 = Math.floor(p.x + PH.W - 1e-6);
     if (p.vy > 0) {
       const r = Math.floor(p.y + PH.H - 1e-6); let land = false, bounce = false;
-      for (let c = c0; c <= c1; c++) { const v = tileAt(t, c, r); if (isSolid(v) || (v === PLAT && prevB <= r + 1e-3)) { land = true; if (v === BOUNCE) bounce = true; } }
+      for (let c = c0; c <= c1; c++) { const v = tileAt(t, c, r); if (isSolid(v) || (isPlat(v) && prevB <= r + 1e-3)) { land = true; if (v === BOUNCE) bounce = true; } }
       if (land) { p.y = r - PH.H; p.vy = 0; p.ground = true; if (bounce) { p.vy = -PH.BV; p.ground = false; } }
     } else if (p.vy < 0) {
       const r = Math.floor(p.y + 1e-6);
@@ -717,6 +738,12 @@ function drawTiles(ctx, st, cs, grid) {
       if (tileAt(t, c - 1, r) !== SOLID && c > 0) ctx.fillRect(x, y, lw * .6, cs);
       if (tileAt(t, c + 1, r) !== SOLID && c < COLS - 1) ctx.fillRect(x + cs - lw * .6, y, lw * .6, cs);
       ctx.globalAlpha = 1;
+    } else if (v === PSOLID || v === PPLAT) {
+      if (grid) { // 作る画面だけ：写真から作った地面がどこかを、うすく見せる（遊ぶ画面では写真のまま）
+        ctx.fillStyle = "rgba(255,255,255,.16)"; ctx.fillRect(x, y, cs, v === PPLAT ? cs * 0.3 : cs);
+        ctx.fillStyle = "rgba(255,255,255,.75)";
+        if (r > 0 && !standable(tileAt(t, c, r - 1)) && tileAt(t, c, r - 1) !== PSOLID) ctx.fillRect(x, y, cs, Math.max(1, cs * 0.06));
+      }
     } else if (v === PLAT) {
       ctx.fillStyle = COL.plat; ctx.fillRect(x, y, cs, cs * 0.3);
       ctx.fillStyle = COL.ink; ctx.fillRect(x, y + cs * 0.3, cs, Math.max(1, cs * 0.07));
@@ -948,7 +975,7 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
       const i = r * COLS + c; if (!cells[i]) continue;
       const thin = r > 0 && r < ROWS - 1 && !cells[i - COLS] && !cells[i + COLS];
-      mk.tiles[i] = thin ? PLAT : SOLID; n++;
+      mk.tiles[i] = thin ? PPLAT : PSOLID; n++;
     }
     if (!n) toast("小さすぎて選べませんでした。もう少し大きなモノを押してください");
   }
