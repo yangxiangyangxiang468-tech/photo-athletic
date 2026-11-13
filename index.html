@@ -559,6 +559,26 @@ function ensureClearable(st, maxAdd = 30, budgetMs = 2000) {
   }
   return res.ok;
 }
+// 旗から出てきて何もしなくても、その場にちゃんと立てるか（落ちる・トゲ・水・ジャンプ台の上ではない）。出直した瞬間にやられ続けないように
+function safeSpot(st, at) {
+  if (!at || at.r < 1 || at.r >= ROWS - 1 || at.c < 0 || at.c >= COLS) return false;
+  const saved = { ...PH }; Object.assign(PH, PH_STD);
+  try {
+    const p = spawn(st, at), inp = { l: false, r: false, j: false, jp: false }, s2 = { ...st, cps: [] };
+    for (let i = 0; i < 120; i++) { const ev = stepPlayer(p, s2, inp, STEP); if (ev === "die" || p.dead > 0) return false; }
+    return p.ground && Math.abs(p.y + PH.H - (at.r + 1)) < 0.02; // 旗の足元に立っている（下へ落ちていない）
+  } finally { Object.assign(PH, saved); }
+}
+// 押した所の近くで、旗を立てられる場所（足場の上の空いたマス）を探す。地面を押したらその上、空中を押したら下の足場の上
+function snapFlag(st, c, r) {
+  const order = [r, r - 1, r - 2, r - 3]; for (let k = r + 1; k < ROWS - 1; k++) order.push(k);
+  for (const rr of order) {
+    if (rr < 1 || rr >= ROWS - 1) continue;
+    if (st.tiles[rr * COLS + c] !== E || !standable(st.tiles[(rr + 1) * COLS + c])) continue;
+    if (safeSpot(st, { c, r: rr })) return { c, r: rr };
+  }
+  return null;
+}
 // ゴールまでの道のりの途中にチェックポイントを置く（道のりが長いほど多く、3本まで）。届く所だけをたどった道なので、旗の場所で詰まない
 function placeCheckpoints(st) {
   const res = reach(st); if (!res.ok) return [];
@@ -569,7 +589,7 @@ function placeCheckpoints(st) {
   for (let j = 1; j <= n; j++) {
     const i = acc.findIndex(v => v >= D * j / (n + 1)); if (i < 0) continue;
     const p = at(path[i]);
-    if (p.r >= 1 && far(p, st.start) >= 5 && far(p, st.goal) >= 5 && cps.every(q => far(p, q) >= 5)) cps.push(p);
+    if (p.r >= 1 && far(p, st.start) >= 5 && far(p, st.goal) >= 5 && cps.every(q => far(p, q) >= 5) && safeSpot(st, p)) cps.push(p);
   }
   return cps;
 }
@@ -756,7 +776,12 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
     if (tool === "cp") { // 押した所に旗を立てる。旗の上を押すと消す（5本まで）
       if (p.r < 1) p.r = 1;
       const i = mk.cps.findIndex(k => Math.abs(k.c - p.c) <= 1 && Math.abs(k.r - p.r) <= 1);
-      if (i >= 0) mk.cps.splice(i, 1); else if (mk.cps.length < 5) { mk.cps.push(p); normalize(mk.tiles, p); } else toast("旗は5本までです");
+      if (i >= 0) { mk.cps.splice(i, 1); return; }
+      if (mk.cps.length >= 5) { toast("旗は5本までです"); return; }
+      const at = snapFlag({ tiles: mk.tiles, start: mk.start, goal: mk.goal }, p.c, p.r);
+      if (!at) { toast("ここには旗を立てられません（出直したときに落ちたりトゲに当たったりする場所です）"); return; }
+      mk.cps.push(at); normalize(mk.tiles, at);
+      if (!reach({ tiles: mk.tiles, start: at, goal: mk.goal }).ok) toast("この旗からはゴールに届かないかもしれません");
       return;
     }
     mk.tiles[p.r * COLS + p.c] = tool;
@@ -775,7 +800,12 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
     else for (let i = 1; i <= n; i++) paint({ c: Math.round(last.c + (p.c - last.c) * i / n), r: Math.round(last.r + (p.r - last.r) * i / n) });
     last = p; drawMake();
   });
-  const end = () => { if (last) { last = null; normalize(mk.tiles, mk.start, mk.goal, ...mk.cps); drawMake(); checkReach(); } };
+  const end = () => { if (last) { last = null; normalize(mk.tiles, mk.start, mk.goal, ...mk.cps); dropUnsafeFlags(); drawMake(); checkReach(); } };
+  function dropUnsafeFlags() { // 描き直して足場が無くなった旗は外す
+    const st = { tiles: mk.tiles, start: mk.start, goal: mk.goal }, n = mk.cps.length;
+    mk.cps = mk.cps.filter(k => safeSpot(st, k));
+    if (mk.cps.length < n) toast("足場が無くなった旗を外しました");
+  }
   cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
   function touched() { const was = mk.edited; mk.edited = true; mk.cleared = null; if (!was) syncPanel(); drawMake(); }
 })();
@@ -862,9 +892,10 @@ let run = null;
 const keys = { l: false, r: false, j: false, jp: false };
 // o: { stage(遊べる形), mode: "test"|"solo"|"online", ghosts, onFinish }
 function startRun(o) {
+  if (o.stage.cps?.length) o = { ...o, stage: { ...o.stage, cps: o.stage.cps.filter(k => safeSpot(o.stage, k)) } }; // 前に作ったコースの危ない旗は使わない
   applyTune(o.mode === "online" ? { ...TUNE_DEF, btn: tune.btn } : tune); // 対戦は2人とも標準の動き
   $("#play .tune").hidden = o.mode === "online";
-  run = { ...o, p: spawn(o.stage), cpSeen: new Set(), cpUntil: 0, t: 0, live: false, fin: null, rec: [], acc: 0, last: null, deaths: 0, cd: o.mode === "online" ? 3 : null, opp: null, oppShown: null, sendAt: 0 };
+  run = { ...o, p: spawn(o.stage), cpSeen: new Set(), cpUntil: 0, quick: 0, spawnT: null, t: 0, live: false, fin: null, rec: [], acc: 0, last: null, deaths: 0, cd: o.mode === "online" ? 3 : null, opp: null, oppShown: null, sendAt: 0 };
   keys.l = keys.r = keys.j = keys.jp = false;
   document.querySelectorAll(".ctl").forEach(b => b.classList.remove("on"));
   $("#playOv").hidden = true;
@@ -890,10 +921,17 @@ function loop(ts) {
     run.acc += dt;
     while (run.acc >= STEP && run.fin == null) {
       run.acc -= STEP;
+      const wasDead = run.p.dead > 0;
       const ev = stepPlayer(run.p, run.stage, keys, STEP); keys.jp = false;
+      if (wasDead && run.p.dead <= 0) run.spawnT = run.t;
       run.t += STEP;
       if (run.rec.length / 2 < run.t * GHOST_HZ) run.rec.push(Math.round(run.p.x * 100), Math.round(run.p.y * 100));
-      if (ev === "die") { run.deaths++; buzz(35); }
+      if (ev === "die") {
+        run.deaths++; buzz(35);
+        // 旗から出てすぐのミスが続いたら、その旗はやめてスタートから
+        if (run.p.cp != null && run.t - (run.spawnT ?? -9) < 0.6) { if (++run.quick >= 2) { run.p.cp = undefined; run.quick = 0; toast("旗の場所が危ないので、スタートから出直します"); } }
+        else run.quick = 0;
+      }
       if (ev === "cp") { run.cpSeen.add(run.p.cp); run.cpUntil = run.t + 0.9; buzz(25); }
       if (ev === "goal") { run.fin = Math.round(run.t * 1000); buzz([40, 60, 90]); finish(); }
     }
