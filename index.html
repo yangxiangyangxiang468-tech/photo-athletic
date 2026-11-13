@@ -450,26 +450,40 @@ function buildTiles(f, o, det = null) {
   normalize(t, start, goal);
   return { tiles: t, start, goal };
 }
-// スタート・ゴールを置く場所：左端（右端）近くで、足場の上に2マスの空きがある一番低い所。
-// 建物の中のすき間（窓など、まわりを壁に囲まれた穴）には置かない：真上に地面が無い（空が開いている）所だけから探す。無ければ台を作る
+// スタート・ゴールを置く場所：写真のモノの上で、2マスの空きがある所。左端（右端）に近い所から探す。
+// 建物の中のすき間（窓など、まわりを壁に囲まれた穴）には置かない（真上が開いている所を先に探す）。写真に無い台は作らない
+function standSpots(t, needOpen) {
+  const open = (c, r) => { for (let k = r - 1; k >= 0; k--) if (isSolid(t[k * COLS + c])) return false; return true; }, out = [];
+  for (let c = 1; c < COLS - 1; c++) for (let r = ROWS - 2; r >= 2; r--)
+    if (standable(t[(r + 1) * COLS + c]) && t[r * COLS + c] === E && t[(r - 1) * COLS + c] === E && (!needOpen || open(c, r))) out.push({ c, r });
+  return out;
+}
 function findSpot(t, left) {
-  const open = (c, r) => { for (let k = r - 1; k >= 0; k--) if (isSolid(t[k * COLS + c])) return false; return true; };
-  for (let k = 1; k <= 8; k++) {
-    const c = left ? k : COLS - 1 - k;
-    for (let r = ROWS - 2; r >= 2; r--) if (standable(t[(r + 1) * COLS + c]) && t[r * COLS + c] === E && t[(r - 1) * COLS + c] === E && open(c, r)) return { c, r };
+  let spots = standSpots(t, true); if (!spots.length) spots = standSpots(t, false);
+  if (spots.length) return spots.reduce((a, b) => (left ? b.c < a.c : b.c > a.c) || (b.c === a.c && b.r > a.r) ? b : a);
+  // 乗れるモノが1つも無い写真だけ：写真のいちばん下のふちを床にする（見えない）
+  for (let c = 0; c < COLS; c++) t[(ROWS - 1) * COLS + c] = PSOLID;
+  return { c: left ? 1 : COLS - 2, r: ROWS - 2 };
+}
+// スタートから実際に行ける場所の中で、一番遠い（右の）所をゴールにする。足場を足さずに、必ずゴールまで行けるコースにする
+function chooseStartGoal(st) {
+  let spots = standSpots(st.tiles, true); if (spots.length < 2) spots = standSpots(st.tiles, false);
+  if (spots.length < 2) return false;
+  const lefts = [...spots].sort((a, b) => a.c - b.c || b.r - a.r), tried = [], nowhere = { c: -99, r: -99 };
+  let best = null;
+  for (const s0 of lefts) {
+    if (tried.length >= 8) break;
+    if (tried.some(p => Math.abs(p.c - s0.c) + Math.abs(p.r - s0.r) < 4)) continue;
+    tried.push(s0);
+    const seen = reach({ tiles: st.tiles, start: s0, goal: nowhere }).seen;
+    for (const g of spots) if (seen[g.r * COLS + g.c] && g.c - s0.c > 0) {
+      const score = g.c - s0.c + 0.01 * (ROWS - g.r);
+      if (!best || score > best.score) best = { score, start: s0, goal: g };
+    }
   }
-  // 無ければ台を作る。写真のモノの上の面と同じくらいの高さに置く（低い所に置くと、モノの横に登るための足場がたくさん要る）
-  const c = left ? 2 : COLS - 3, tops = [];
-  for (let x = 0; x < COLS; x++) for (let y = 2; y < ROWS; y++) if (standable(t[y * COLS + x])) { if (!standable(t[(y - 1) * COLS + x])) tops.push(y); break; }
-  tops.sort((a, b) => a - b);
-  let want = tops.length ? tops[Math.floor(tops.length / 2)] : ROWS - 3; // 上の面の高さの真ん中
-  want = Math.max(4, Math.min(ROWS - 2, want));
-  // その高さで、台の3マスと上の2マスが空いている所（無ければ下へずらす。それでも無ければ上から見て最初に何かある所の上）
-  const freeAt = r => [c - 1, c, c + 1].every(x => t[r * COLS + x] === E && t[(r - 1) * COLS + x] === E && t[(r - 2) * COLS + x] === E);
-  let r = -1; for (let y = want; y < ROWS; y++) if (freeAt(y)) { r = y; break; }
-  if (r < 0) { r = 3; while (r < ROWS - 1 && [c - 1, c, c + 1].every(x => t[r * COLS + x] === E)) r++; r = Math.max(3, Math.min(ROWS - 1, r)); }
-  for (let dc = -1; dc <= 1; dc++) t[r * COLS + c + dc] = SOLID;
-  return { c, r: r - 1 };
+  if (!best || best.goal.c - best.start.c < 6) return false;
+  st.start = best.start; st.goal = best.goal; normalize(st.tiles, st.start, st.goal);
+  return true;
 }
 // スタート・ゴールのマスとその上を空け、すぐ横のトゲを消す（出た瞬間にやられないように）
 function normalize(t, ...spots) {
@@ -870,7 +884,8 @@ function refit() {
 // 初めて使うときに AI の部品（約27MB）を読み込む。2回目からは端末に保存したものを使う。読み込めないときは今までのやり方だけで作る
 const SEG_LIB = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 const SEG_MODEL = "Xenova/segformer-b0-finetuned-ade-512-512";
-const SEG_BG = new Set(["wall", "floor", "ceiling", "sky", "windowpane", "curtain", "blind", "rug", "road", "sidewalk", "grass", "earth", "field", "sand", "path", "dirt track", "runway", "water", "sea", "river", "lake", "mountain", "hill", "land", "painting", "mirror", "door", "screen door", "poster", "bulletin board"]);
+const SEG_BG = new Set(["wall", "floor", "ceiling", "sky", "windowpane", "curtain", "blind", "rug", "road", "sidewalk", "grass", "earth", "field", "sand", "path", "dirt track", "runway", "water", "sea", "river", "lake", "mountain", "hill", "land", "painting", "mirror", "door", "screen door", "poster", "bulletin board",
+  "light", "lamp", "chandelier", "sconce"]); // 照明はすり抜ける（乗れる場所をせばめないように）
 const AI_NAMES = { computer: "パソコン", "television receiver": "テレビ", "crt screen": "画面", monitor: "モニター", screen: "画面", desk: "机", table: "テーブル", chair: "椅子", "swivel chair": "椅子", armchair: "ひじかけ椅子", seat: "座席", sofa: "ソファ", bed: "ベッド", cabinet: "棚", shelf: "棚", bookcase: "本棚", "chest of drawers": "たんす", wardrobe: "たんす", book: "本", lamp: "ライト", box: "箱", bottle: "ボトル", glass: "コップ", vase: "花びん", plant: "植物", flower: "花", "pot": "鉢", tree: "木", palm: "ヤシの木", building: "建物", house: "家", skyscraper: "ビル", tower: "塔", car: "車", truck: "トラック", bus: "バス", van: "ワゴン車", bicycle: "自転車", person: "人", fireplace: "暖炉", radiator: "ラジエーター", refrigerator: "冷蔵庫", stove: "コンロ", oven: "オーブン", microwave: "電子レンジ", sink: "流し", basket: "かご", counter: "カウンター", "kitchen island": "キッチン台", bench: "ベンチ", stairs: "階段", stairway: "階段", step: "段", railing: "手すり", fence: "フェンス", rock: "岩", bag: "かばん", clock: "時計", fan: "扇風機", pillow: "まくら", cushion: "クッション", toilet: "トイレ", bathtub: "浴そう", towel: "タオル", "trade name": "看板", signboard: "看板", streetlight: "街灯", pole: "柱", column: "柱", boat: "ボート", ship: "船", airplane: "飛行機", animal: "動物", dog: "犬", cat: "猫", ball: "ボール", food: "食べもの", plate: "皿", tray: "トレー", "kitchen": "台所" };
 let aiLoading = null;
 function loadAI() {
@@ -934,9 +949,11 @@ function regen(fix = true) {
   mk.reach = { pending: true };
   setTimeout(() => {
     if (!mk || token !== fixToken || mk.edited || mk.tiles !== r.tiles) return; // そのあと作り直した・手で描き始めた
-    const plats = () => mk.tiles.reduce((n, v) => n + (v === PLAT), 0), before = plats();
-    const ok = ensureClearable(r, 30, 3000);
-    mk.reach = { ok, added: Math.max(0, Math.round((plats() - before) / 3)) };
+    // 写真に無い足場は足さない。行ける所の中からスタートとゴールを選び直す
+    if (!reach(r).ok) chooseStartGoal(r);
+    mk.start = r.start; mk.goal = r.goal;
+    const ok = reach(r).ok;
+    mk.reach = { ok, added: 0 };
     if (ok) { mk.cps = placeCheckpoints(r); normalize(mk.tiles, ...mk.cps); }
     if (!$("#make").hidden) { drawMake(); showReach(); }
   }, 40);
@@ -946,8 +963,8 @@ function showReach() {
   const el = $("#reachNote"), r = mk.reach;
   el.hidden = !r; if (!r) return;
   el.className = "reach " + (r.pending ? "" : r.ok ? "ok" : "ng");
-  if (!r.pending && !r.ok) { el.innerHTML = `⚠ このままだとゴールに届かないかもしれません。<button class="btn sm" data-act="autofix">足場を自動で足す</button>`; return; }
-  el.textContent = r.pending ? "… ゴールまで行けるか調べています" : r.ok ? `✓ ゴールまで行けるコースです${r.added ? `（届かない所に足場を${r.added}つ足しました）` : ""}` : "⚠ このままだとゴールに届かないかもしれません。指で足場を足してください";
+  if (!r.pending && !r.ok) { el.textContent = "⚠ このままだとゴールに届かないかもしれません。スタートやゴールを、行ける所へ動かしてください"; return; }
+  el.textContent = r.pending ? "… ゴールまで行けるか調べています" : "✓ ゴールまで行けるコースです";
 }
 function syncPanel() {
   document.querySelectorAll("[data-opt]").forEach(el => { const k = el.dataset.opt; if (el.type === "checkbox") el.checked = mk.opts[k]; else el.value = mk.opts[k]; });
@@ -1342,19 +1359,6 @@ document.addEventListener("click", async e => {
   switch (el.dataset.act) {
     case "make-back": if (!mk.edited || confirm("作りかけのコースを捨てますか？")) { mk = null; show("home"); } break;
     case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); if (!mk.det) detectObjects(); } break;
-    case "autofix": { // 手で描いたあとでも、届かない所に足場を足す
-      mk.undo.push({ tiles: mk.tiles.slice(), start: { ...mk.start }, goal: { ...mk.goal }, cps: mk.cps.map(k => ({ ...k })) });
-      mk.reach = { pending: true }; showReach();
-      setTimeout(() => {
-        if (!mk) return;
-        const st = { tiles: mk.tiles, start: mk.start, goal: mk.goal }, before = mk.tiles.reduce((n, v) => n + (v === PLAT), 0);
-        const ok = ensureClearable(st, 30, 3000);
-        mk.reach = { ok, added: Math.max(0, Math.round((mk.tiles.reduce((n, v) => n + (v === PLAT), 0) - before) / 3)) };
-        mk.cleared = null; drawMake(); showReach();
-        if (!ok) toast("自動ではつなげませんでした。指で足場を足してください");
-      }, 40);
-      break;
-    }
     case "undo": { const u = mk.undo.pop(); if (u) { Object.assign(mk, u); mk.cleared = null; drawMake(); checkReach(); } break; }
     case "test": runTest(); break;
     case "retest": runTest(); break;
