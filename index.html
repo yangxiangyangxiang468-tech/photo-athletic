@@ -210,7 +210,7 @@ h3 { margin: 0; font-size: 16px; }
         <div class="group" id="autoGroup">
           <h3>写真から自動で作る</h3>
           <div class="rule" id="focusRule"><label>写真の位置</label><input type="range" min="0" max="100" data-opt="focus"><small>写真の上下（左右）どこをコースに使うか</small></div>
-          <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 建物・モノの上 → 足場</label><input type="range" min="10" max="100" data-opt="objAmt"><small>屋根・机・棚の上に乗れる。空や壁とモノの見分けの強さ</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 建物・モノ → 地面</label><input type="range" min="10" max="100" data-opt="objAmt"><small>物そのものに乗れる（屋根・机・棚の上を歩ける）。空や壁とモノの見分けの強さ</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="edge"> 物のふち → 薄い足場</label><input type="range" min="2" max="30" data-opt="edgeAmt"><small>下からすり抜けて乗れる足場</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="dark"> 暗い所 → 地面</label><input type="range" min="0" max="45" data-opt="darkAmt"><small>紙にペンで描いて撮ると自分でコースが描ける</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="color"> 色 → しかけ</label><input type="range" min="0" max="100" data-opt="colorAmt"><small>赤 = トゲ　青 = 水　緑 = ジャンプ台</small></div>
@@ -338,19 +338,20 @@ function objectMask(f, amt) {
   return m;
 }
 
-// 写真の特徴と設定からマスを決める。優先順位：色のしかけ ＞ 暗い所の地面 ＞ 建物・モノの上 ＞ ふちの足場
+// 写真の特徴と設定からマスを決める。優先順位：色のしかけ ＞ 暗い所の地面 ＞ 建物・モノ ＞ ふちの足場
 function buildTiles(f, o) {
   const N = COLS * ROWS, t = new Uint8Array(N);
   const m = o.obj && o.objAmt > 0 ? objectMask(f, o.objAmt) : null;
   if (m) {
-    // モノの上の面（すぐ上が「うしろ」）を足場に。屋根・机の天板・棚の上。斜めの屋根は階段になる
-    const top = new Uint8Array(N);
-    for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (m[r * COLS + c] && !m[(r - 1) * COLS + c]) top[r * COLS + c] = 1;
-    for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-      if (!top[r * COLS + c]) continue;
-      let nb = false; // 1マスだけ飛び出た先っぽ（アンテナ・電柱）は足場にしない
-      for (let dr = -1; dr <= 1 && !nb; dr++) for (const dc of [-1, 1]) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS && top[rr * COLS + cc]) nb = true; }
-      if (nb) t[r * COLS + c] = PLAT;
+    // 建物・モノそのものを地面（乗れて、通り抜けられないかたまり）にする。屋根・机・棚の上を歩ける
+    // ただし、1マス幅の細い縦の物（電柱・棒）は壁にならないように消し、1マスの厚さしかない横の物（電線・手すり）はすり抜けられる薄い足場に
+    const at = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS && m[r * COLS + c];
+    const m2 = new Uint8Array(N);
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (at(r, c) && (at(r, c - 1) || at(r, c + 1))) m2[r * COLS + c] = 1;
+    const at2 = (r, c) => r >= 0 && r < ROWS && m2[r * COLS + c];
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      if (!m2[r * COLS + c]) continue;
+      t[r * COLS + c] = r > 0 && r < ROWS - 1 && !at2(r - 1, c) && !at2(r + 1, c) ? PLAT : SOLID;
     }
   }
   if (o.dark && o.darkAmt > 0) {
@@ -396,15 +397,20 @@ function buildTiles(f, o) {
   normalize(t, start, goal);
   return { tiles: t, start, goal };
 }
-// スタート・ゴールを置く場所：左端（右端）近くで、足場の上に2マスの空きがある一番低い所。無ければ台を作る
+// スタート・ゴールを置く場所：左端（右端）近くで、足場の上に2マスの空きがある一番低い所。
+// 建物の中のすき間（窓など、まわりを壁に囲まれた穴）には置かない：真上に地面が無い（空が開いている）所だけから探す。無ければ台を作る
 function findSpot(t, left) {
+  const open = (c, r) => { for (let k = r - 1; k >= 0; k--) if (isSolid(t[k * COLS + c])) return false; return true; };
   for (let k = 1; k <= 8; k++) {
     const c = left ? k : COLS - 1 - k;
-    for (let r = ROWS - 2; r >= 2; r--) if (standable(t[(r + 1) * COLS + c]) && t[r * COLS + c] === E && t[(r - 1) * COLS + c] === E) return { c, r };
+    for (let r = ROWS - 2; r >= 2; r--) if (standable(t[(r + 1) * COLS + c]) && t[r * COLS + c] === E && t[(r - 1) * COLS + c] === E && open(c, r)) return { c, r };
   }
-  const c = left ? 2 : COLS - 3, r = ROWS - 4;
-  for (let dc = -1; dc <= 1; dc++) t[(r + 1) * COLS + c + dc] = SOLID;
-  return { c, r };
+  // 無ければ、空の見える所（上から見て最初に何かある所の上）に3マスの台を作る（水やトゲの上でも）
+  const c = left ? 2 : COLS - 3;
+  let r = 3; while (r < ROWS - 1 && [c - 1, c, c + 1].every(x => t[r * COLS + x] === E)) r++;
+  r = Math.max(3, Math.min(ROWS - 1, r));
+  for (let dc = -1; dc <= 1; dc++) t[r * COLS + c + dc] = SOLID;
+  return { c, r: r - 1 };
 }
 // スタート・ゴールのマスとその上を空け、すぐ横のトゲを消す（出た瞬間にやられないように）
 function normalize(t, ...spots) {
@@ -482,7 +488,7 @@ const PLANS = (() => {
   for (const hold of [0.15, 9]) L.push({ d: 0, hold });
   return L;
 })();
-function simFrom(st, c, r, plan, out) {
+function simFrom(st, c, r, plan, out, box) { // box: 通ったマスの範囲 [左, 上, 右, 下] を広げていく
   const p = { x: c + 0.5 - PH.W / 2, y: r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: true, coyote: PH.COYOTE, buf: 0, cut: false, face: 1, dead: 0, water: false };
   const inp = { l: false, r: false, j: false, jp: false };
   let t = 0, left = false;
@@ -493,6 +499,8 @@ function simFrom(st, c, r, plan, out) {
     else if (plan.swim) { inp.jp = i % 18 === 0; inp.j = inp.jp; }
     else { inp.jp = i === 0; inp.j = t < plan.hold; }
     const ev = stepPlayer(p, st, inp, STEP);
+    const x0 = Math.floor(p.x) - 1, y0 = Math.floor(p.y) - 1, x1 = Math.floor(p.x + PH.W) + 1, y1 = Math.floor(p.y + PH.H) + 1;
+    if (x0 < box[0]) box[0] = x0; if (y0 < box[1]) box[1] = y0; if (x1 > box[2]) box[2] = x1; if (y1 > box[3]) box[3] = y1;
     if (ev === "goal") return "goal";
     if (ev === "die" || p.dead > 0) return null;
     if (!p.ground) { left = true; continue; }
@@ -503,15 +511,26 @@ function simFrom(st, c, r, plan, out) {
   return null;
 }
 // 戻り値 { ok: ゴールに届くか, seen: 立てた場所の集合 }
-function reach(st) {
+// 1つの立てる場所から試した結果 { goal: ゴールに届いた, out: 着地した場所, box: 通ったマスの範囲 }
+function expand(st, k) {
+  const c = k % COLS, r = (k / COLS) | 0, out = [], box = [c, r, c, r];
+  for (const plan of PLANS) if (simFrom(st, c, r, plan, out, box) === "goal") return { goal: true, out, box };
+  return { goal: false, out, box };
+}
+const boxHit = (b, d) => b[0] <= d[2] && d[0] <= b[2] && b[1] <= d[3] && d[1] <= b[3];
+// cache: 前に調べた結果（Map）。dirty: 変えたマスの範囲。その範囲を通った結果だけ調べ直す。新しく調べた結果は fresh に入れる
+function reach(st, cache = null, dirty = null, fresh = null) {
   const saved = { ...PH }; Object.assign(PH, PH_EASY);
   try {
     const N = COLS * ROWS, seen = new Uint8Array(N), par = new Int32Array(N).fill(-1), q = [st.start.r * COLS + st.start.c];
     seen[q[0]] = 1;
     for (let h = 0; h < q.length; h++) {
-      const k = q[h], c = k % COLS, r = (k / COLS) | 0, out = [];
-      for (const plan of PLANS) if (simFrom(st, c, r, plan, out) === "goal") return { ok: true, seen, par, last: k };
-      for (const j of out) if (j >= 0 && j < N && !seen[j]) { seen[j] = 1; par[j] = k; q.push(j); }
+      const k = q[h];
+      let e = cache && cache.get(k);
+      if (e && dirty && boxHit(e.box, dirty)) e = null;
+      if (!e) { e = expand(st, k); (fresh || cache)?.set(k, e); }
+      if (e.goal) return { ok: true, seen, par, last: k };
+      for (const j of e.out) if (j >= 0 && j < N && !seen[j]) { seen[j] = 1; par[j] = k; q.push(j); }
     }
     return { ok: false, seen, par };
   } finally { Object.assign(PH, saved); }
@@ -522,16 +541,18 @@ function reach(st) {
 function ensureClearable(st, maxAdd = 30, budgetMs = 2000) {
   const g = st.goal, until = Date.now() + budgetMs; // スマホで待たせすぎないよう、調べる時間に上限
   const score = k => { const c = k % COLS, r = (k / COLS) | 0; return Math.abs(g.c - c) + 2 * Math.max(0, r - g.r) + 0.5 * Math.max(0, g.r - r); };
-  let res = reach(st);
+  const cache = new Map();
+  let res = reach(st, cache);
   for (let n = 0; !res.ok && n < maxAdd; n++) {
     const anchors = [];
     for (let k = 0; k < res.seen.length; k++) if (res.seen[k]) anchors.push(k);
     anchors.sort((a, b) => score(a) - score(b));
     const picked = []; // 近すぎる場所は除いて、ばらけた候補を10か所まで
     for (const k of anchors) { if (picked.length >= 10) break; if (picked.every(p => Math.abs(p % COLS - k % COLS) + Math.abs(((p / COLS) | 0) - ((k / COLS) | 0)) >= 3)) picked.push(k); }
-    let improved = false;
+    let improved = false, fallback = null; // fallback: ゴールには近づかないが、壁をよじ登れる（今より高い所へ行ける）置き方
     for (const anchor of picked) {
       const c0 = anchor % COLS, r0 = (anchor / COLS) | 0, as = score(anchor), dir = Math.sign(g.c - c0) || 1;
+      let topNear = r0; for (let k = 0; k < res.seen.length; k++) if (res.seen[k] && Math.abs(k % COLS - c0) <= 3) topNear = Math.min(topNear, (k / COLS) | 0);
       // まずゴールの方へ。だめなら逆向き・上下にも
       const ups = r0 > g.r ? [2, 1, 0, -1, -2] : r0 < g.r ? [0, -1, -2, 1, 2] : [0, 1, -1, 2, -2];
       for (const sd of [dir, -dir]) for (const dx of [3, 2, 1, 0, -1, -2]) for (const up of ups) {
@@ -548,13 +569,22 @@ function ensureClearable(st, maxAdd = 30, budgetMs = 2000) {
         const backup = st.tiles.slice();
         for (let c = cx - 1; c <= cx + 1; c++) st.tiles[row * COLS + c] = PLAT;
         normalize(st.tiles, st.start, st.goal);
-        const r2 = reach(st);
+        // まず、その場所から新しい足場に乗れるかだけ手早く確かめる（乗れない置き方はコース全体を調べ直さない）
+        const saved = { ...PH }; Object.assign(PH, PH_EASY);
+        let lands; try { lands = expand(st, anchor); } finally { Object.assign(PH, saved); }
+        if (!lands.goal && !lands.out.some(k => ((k / COLS) | 0) === row - 1 && Math.abs(k % COLS - cx) <= 1)) { st.tiles.set(backup); continue; }
+        const dirty = [cx - 2, row - 3, cx + 2, row + 1], trial = new Map();
+        const r2 = reach(st, cache, dirty, trial);
+        const commit = () => { for (const [k, e] of cache) if (boxHit(e.box, dirty)) cache.delete(k); for (const [k, e] of trial) cache.set(k, e); };
         let gain = r2.ok;
         for (let k = 0; !gain && k < r2.seen.length; k++) if (r2.seen[k] && !res.seen[k] && score(k) < as - 0.01) gain = true;
-        if (gain) { res = r2; improved = true; } else st.tiles.set(backup);
+        if (gain) { commit(); res = r2; improved = true; continue; }
+        if (!fallback) for (let k = 0; k < r2.seen.length; k++) if (r2.seen[k] && !res.seen[k] && ((k / COLS) | 0) < topNear) { fallback = { tiles: st.tiles.slice(), res: r2, commit }; break; }
+        st.tiles.set(backup);
       }
       if (improved) break;
     }
+    if (!improved && fallback) { st.tiles.set(fallback.tiles); fallback.commit(); res = fallback.res; improved = true; }
     if (!improved) break;
   }
   return res.ok;
@@ -620,7 +650,7 @@ const IMG_W = 640, IMG_H = 352; // 保存する写真の大きさ（コースと
 function canvasOf(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
 
 // ---------- コースの描画 ----------
-const COL = { solid: "rgba(16,15,12,.62)", edge: "#fffbe8", plat: "#ffd23f", spike: "#ff3b30", water: "rgba(47,111,237,.5)", bounce: "#2fbf55", ink: "#1b1a17" };
+const COL = { solid: "rgba(16,15,12,.3)", edge: "#fffbe8", plat: "#ffd23f", spike: "#ff3b30", water: "rgba(47,111,237,.5)", bounce: "#2fbf55", ink: "#1b1a17" };
 function drawTiles(ctx, st, cs, grid) {
   const t = st.tiles;
   if (grid) { ctx.strokeStyle = "rgba(255,255,255,.12)"; ctx.lineWidth = 1; ctx.beginPath(); for (let c = 1; c < COLS; c++) { ctx.moveTo(c * cs, 0); ctx.lineTo(c * cs, ROWS * cs); } for (let r = 1; r < ROWS; r++) { ctx.moveTo(0, r * cs); ctx.lineTo(COLS * cs, r * cs); } ctx.stroke(); }
@@ -730,21 +760,29 @@ function refit() {
   mk.feat = cellFeatures(sx.getImageData(0, 0, small.width, small.height).data, small.width, small.height);
 }
 // fix = true のときは、ゴールまで届くか調べて、届かなければ足場を足す（スライダーを動かしている途中は軽い方だけ）
+// 調べるのに時間がかかることがあるので、先に「調べています」を出してから少しあとで調べる
+let fixToken = 0;
 function regen(fix = true) {
   const r = buildTiles(mk.feat, mk.opts); mk.tiles = r.tiles; mk.start = r.start; mk.goal = r.goal; mk.edited = false; mk.cleared = null;
   mk.cps = [];
+  const token = ++fixToken;
   if (!fix) { mk.reach = null; return; }
-  const plats = () => mk.tiles.reduce((n, v) => n + (v === PLAT), 0), before = plats();
-  const ok = ensureClearable(r);
-  mk.reach = { ok, added: Math.max(0, Math.round((plats() - before) / 3)) };
-  if (ok) { mk.cps = placeCheckpoints(r); normalize(mk.tiles, ...mk.cps); }
+  mk.reach = { pending: true };
+  setTimeout(() => {
+    if (!mk || token !== fixToken || mk.edited || mk.tiles !== r.tiles) return; // そのあと作り直した・手で描き始めた
+    const plats = () => mk.tiles.reduce((n, v) => n + (v === PLAT), 0), before = plats();
+    const ok = ensureClearable(r, 30, 3000);
+    mk.reach = { ok, added: Math.max(0, Math.round((plats() - before) / 3)) };
+    if (ok) { mk.cps = placeCheckpoints(r); normalize(mk.tiles, ...mk.cps); }
+    if (!$("#make").hidden) { drawMake(); showReach(); }
+  }, 40);
 }
 function checkReach() { mk.reach = { ok: reach({ tiles: mk.tiles, start: mk.start, goal: mk.goal, cps: mk.cps }).ok, added: 0 }; showReach(); }
 function showReach() {
   const el = $("#reachNote"), r = mk.reach;
   el.hidden = !r; if (!r) return;
-  el.className = "reach " + (r.ok ? "ok" : "ng");
-  el.textContent = r.ok ? `✓ ゴールまで行けるコースです${r.added ? `（届かない所に足場を${r.added}つ足しました）` : ""}` : "⚠ このままだとゴールに届かないかもしれません。指で足場を足してください";
+  el.className = "reach " + (r.pending ? "" : r.ok ? "ok" : "ng");
+  el.textContent = r.pending ? "… ゴールまで行けるか調べています" : r.ok ? `✓ ゴールまで行けるコースです${r.added ? `（届かない所に足場を${r.added}つ足しました）` : ""}` : "⚠ このままだとゴールに届かないかもしれません。指で足場を足してください";
 }
 function syncPanel() {
   document.querySelectorAll("[data-opt]").forEach(el => { const k = el.dataset.opt; if (el.type === "checkbox") el.checked = mk.opts[k]; else el.value = mk.opts[k]; });
@@ -998,6 +1036,7 @@ addEventListener("keyup", e => { const k = KEYMAP[e.code]; if (k) keys[k] = fals
 
 // 1人で走る（テスト／マイコース／もらったコース）
 function runTest() {
+  if (mk.reach?.pending) { toast("ゴールまで行けるか調べています。少し待ってください"); return; }
   startRun({ stage: makeStage(), mode: "test", ghosts: mk.cleared?.ghost ? [{ data: mk.cleared.ghost, ms: mk.cleared.ms, color: "#9aa0a6", label: "前回" }] : [], onFinish: (ms, ghost) => {
     if (!mk.cleared || ms < mk.cleared.ms) mk.cleared = { ms, ghost };
     overlay(`<div class="big">クリア！</div><div><span class="time">${fmt(ms)}</span> 秒</div>
