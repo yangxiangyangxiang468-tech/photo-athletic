@@ -118,6 +118,13 @@ h3 { margin: 0; font-size: 16px; }
 .tool i { width: 22px; height: 14px; border-radius: 3px; border: 1.5px solid var(--ink); }
 .tool.on { border-color: var(--ink); background: var(--sun); }
 .locked { opacity: .45; pointer-events: none; }
+.stickers { display: flex; gap: 8px; flex-wrap: wrap; }
+.stk { width: 66px; height: 66px; border: 2px solid var(--line); border-radius: 10px; display: grid; place-items: center; cursor: pointer; padding: 3px;
+  background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 12px 12px; }
+.stk.on { border-color: var(--ink); box-shadow: 0 0 0 3px var(--sun); }
+.stk canvas { max-width: 100%; max-height: 100%; display: block; }
+.mapcard { background: var(--card); border: 2px solid var(--ink); border-radius: 6px; padding: 8px 8px 12px; box-shadow: var(--shadow); display: grid; gap: 8px; cursor: pointer; text-align: left; }
+.mapcard canvas { width: 100%; display: block; border: 1px solid var(--ink); }
 .reach { margin: 0; font-size: 13.5px; font-weight: 700; border-radius: 10px; padding: 8px 10px; border: 2px solid var(--ink); }
 .reach.ok { background: #e3f7e8; }
 .reach.ng { background: #fff1c2; }
@@ -187,6 +194,7 @@ h3 { margin: 0; font-size: 16px; }
     </header>
     <div class="menu">
       <label class="btn big primary" for="photoIn">📷 写真でコースを作る<small>撮影、またはアルバムから選ぶ</small></label>
+      <button class="btn big" data-go="maps">🗺 マップで遊ぶ<small>マップを選んで、撮ったモノを足場に置く</small></button>
       <button class="btn big" data-go="stages">マイコース<small id="stageCount">作ったコース・もらったコース</small></button>
       <button class="btn big" data-go="online">オンライン対戦<small>部屋コードで友だちと同時に走る</small></button>
     </div>
@@ -225,6 +233,42 @@ h3 { margin: 0; font-size: 16px; }
         <div class="btns"><button class="btn big primary" data-act="test">▶ テストプレイ</button></div>
         <p class="reach" id="reachNote" hidden></p>
         <p class="note">自分でゴールできたら保存できます。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- マップを選ぶ -->
+<section id="maps" class="screen" hidden>
+  <div class="wrap">
+    <div class="top"><h2>マップを選ぶ</h2><button class="btn sm quiet" data-go="home">戻る</button></div>
+    <p class="note">マップを選んだら、身のまわりのモノを撮って、マップに足場として置けます。</p>
+    <div class="grid" id="mapGrid"></div>
+  </div>
+</section>
+
+<!-- 撮ったモノをマップに置く -->
+<section id="place" class="screen" hidden>
+  <div class="wrap">
+    <div class="top"><h2 id="placeTitle">モノを置く</h2><button class="btn sm quiet" data-act="place-back">やめる</button></div>
+    <div class="make">
+      <div class="stagebox"><canvas id="pl"></canvas></div>
+      <div class="panel">
+        <div class="group">
+          <h3>1. モノを撮る</h3>
+          <div class="btns"><label class="btn primary" for="objIn">📷 モノを撮る</label></div>
+          <input type="file" id="objIn" accept="image/*" class="vh">
+          <p class="note" id="cutNote">コップ・ぬいぐるみ・本・くつなど。モノを写真のまん中に大きく撮ってください。</p>
+          <div class="stickers" id="stickers"></div>
+        </div>
+        <div class="group">
+          <h3>2. マップを押して置く</h3>
+          <p class="note">押した所に置けます。押したまま動かすと位置を変えられます。</p>
+          <div class="rule"><label>大きさ</label><input type="range" min="2" max="18" step="1" id="stSize"><small>横のマスの数（最後に置いたモノと、これから置くモノ）</small></div>
+          <div class="btns"><button class="btn sm" data-act="place-undo">1つ戻す</button></div>
+        </div>
+        <div class="btns"><button class="btn big primary" data-act="place-done">▶ 置き終わった</button></div>
+        <p class="note">置いたモノの上に乗れます（横や下からはすり抜けます）。</p>
       </div>
     </div>
   </div>
@@ -773,6 +817,35 @@ function selectRegion(px, W, H, fx, fy) {
   }
   return { cells: fill, share: q.length / n };
 }
+// ---------- マップ（あらかじめ用意したコース） ----------
+// ground: [左, 右, 上の行] の地面（そこから下はぜんぶ地面）。plats: [左, 右, 行] の薄い足場。絵は地形どおりに描くので、マスは見えない種類（PSOLID・PPLAT）にする
+const MAPS = [
+  { id: "meadow", name: "草原", theme: "meadow", ground: [[0, 7, 18], [11, 16, 17], [20, 24, 18], [28, 39, 16]], plats: [[8, 10, 15], [17, 19, 14], [25, 27, 14]], start: { c: 2, r: 17 }, goal: { c: 37, r: 15 } },
+  { id: "city", name: "夕やけの街", theme: "city", ground: [[0, 6, 15], [10, 13, 13], [17, 21, 16], [25, 28, 12], [32, 39, 14]], plats: [[7, 9, 13], [14, 16, 12], [22, 24, 13], [29, 31, 11]], start: { c: 2, r: 14 }, goal: { c: 37, r: 13 } },
+  { id: "forest", name: "夜の森", theme: "forest", ground: [[0, 5, 19], [9, 12, 17], [16, 18, 19], [22, 26, 16], [31, 39, 18]], plats: [[6, 8, 16], [13, 15, 15], [19, 21, 14], [27, 30, 14]], start: { c: 2, r: 18 }, goal: { c: 37, r: 17 } },
+];
+function mapTiles(map) {
+  const t = new Uint8Array(COLS * ROWS);
+  for (const [a, b, top] of map.ground) for (let c = a; c <= b; c++) for (let r = top; r < ROWS; r++) t[r * COLS + c] = PSOLID;
+  for (const [a, b, r] of map.plats || []) for (let c = a; c <= b; c++) t[r * COLS + c] = PPLAT;
+  return t;
+}
+// 置いたモノ（切り抜いた写真）が覆うマスを調べて、その上の面に乗れるようにする。
+// placed: [{ x: 横のまん中, y: 下のふち, w: 横の幅（マス）, h: 縦の高さ（マス）, alpha: (u, v) => 0〜1 の不透明さ（u, v は 0〜1） }]
+function placeTiles(base, placed, start, goal) {
+  const N = COLS * ROWS, t = base.slice(), obj = new Uint8Array(N);
+  for (const p of placed) {
+    const x0 = p.x - p.w / 2, y0 = p.y - p.h;
+    for (let r = Math.max(0, Math.floor(y0)); r <= Math.min(ROWS - 1, Math.floor(p.y)); r++) for (let c = Math.max(0, Math.floor(x0)); c <= Math.min(COLS - 1, Math.floor(x0 + p.w)); c++) {
+      let n = 0; // マスの中の 4×4 点のうち、モノが写っている点の割合
+      for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) { const u = (c + (b + 0.5) / 4 - x0) / p.w, v = (r + (a + 0.5) / 4 - y0) / p.h; if (u >= 0 && u < 1 && v >= 0 && v < 1 && p.alpha(u, v) > 0.5) n++; }
+      if (n >= 7) obj[r * COLS + c] = 1;
+    }
+  }
+  for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) { const i = r * COLS + c; if (obj[i] && !obj[i - COLS] && (t[i] === E || t[i] === PPLAT)) t[i] = PPLAT; }
+  normalize(t, start, goal);
+  return t;
+}
 // ==ENGINE END==
 
 // ---------- 小道具 ----------
@@ -791,6 +864,8 @@ function show(name) {
   appFeel(name);
   if (name === "stages") renderStages();
   if (name === "online") renderOnline();
+  if (name === "maps") renderMaps();
+  if (name === "place" && pl) setTimeout(drawPlace, 0);
   if (name === "home") $("#stageCount").textContent = stages.length ? `${stages.length}コース` : "作ったコース・もらったコース";
   window.scrollTo(0, 0);
 }
@@ -977,6 +1052,170 @@ function showAI() {
     : "壁・床・空のほかは、写っているモノぜんぶに乗れるようにする";
 }
 
+// ---------- マップで遊ぶ：マップの絵・選ぶ画面・撮ったモノを置く画面 ----------
+const MAP_THEMES = {
+  meadow: { sky: ["#7cc8ff", "#d6f0ff"], top: "#4caf50", dirt: "#8d5a2b", dot: "#a7713d", plank: "#c98b4a" },
+  city: { sky: ["#4a2f7a", "#e0708a", "#ffc27a"], top: "#7c7f90", dirt: "#3f4252", dot: "#545869", plank: "#a5714c" },
+  forest: { sky: ["#0a1430", "#24345f"], top: "#2f7a42", dirt: "#3b2a20", dot: "#4d382a", plank: "#7a5a3a" },
+};
+function seeded(n) { let x = n; return () => (x = (x * 16807) % 2147483647) / 2147483647; }
+function paintMap(ctx, map, W, H) {
+  const th = MAP_THEMES[map.theme], cs = W / COLS, rnd = seeded(7 + map.id.length * 31);
+  const g = ctx.createLinearGradient(0, 0, 0, H); th.sky.forEach((c, i) => g.addColorStop(i / (th.sky.length - 1), c)); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (map.theme === "meadow") {
+    ctx.fillStyle = "#fff6b0"; ctx.beginPath(); ctx.arc(W * .82, H * .2, cs * 2.2, 0, 7); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.9)"; for (let k = 0; k < 5; k++) { const x = rnd() * W, y = rnd() * H * .35 + cs; for (let j = 0; j < 4; j++) { ctx.beginPath(); ctx.ellipse(x + j * cs * .9, y + (j % 2) * cs * .3, cs * 1.3, cs * .8, 0, 0, 7); ctx.fill(); } }
+    ctx.fillStyle = "#a8dca0"; ctx.beginPath(); ctx.moveTo(0, H); for (let x = 0; x <= W; x += cs) ctx.lineTo(x, H * .62 - Math.sin(x / W * 7) * cs * 2); ctx.lineTo(W, H); ctx.fill();
+  } else if (map.theme === "city") {
+    ctx.fillStyle = "#ffd98a"; ctx.beginPath(); ctx.arc(W * .7, H * .62, cs * 3, 0, 7); ctx.fill();
+    for (let x = 0; x < W;) { const w = cs * (2 + rnd() * 3), h = H * (.25 + rnd() * .4); ctx.fillStyle = "#2b2142"; ctx.fillRect(x, H - h, w, h);
+      ctx.fillStyle = "rgba(255,214,120,.8)"; for (let y = H - h + cs * .6; y < H - cs; y += cs * .9) for (let wx = x + cs * .4; wx < x + w - cs * .4; wx += cs * .8) if (rnd() < .35) ctx.fillRect(wx, y, cs * .3, cs * .4);
+      x += w + cs * .2; }
+  } else {
+    ctx.fillStyle = "#fff"; for (let k = 0; k < 70; k++) { ctx.globalAlpha = .4 + rnd() * .6; ctx.fillRect(rnd() * W, rnd() * H * .6, 1.5, 1.5); } ctx.globalAlpha = 1;
+    ctx.fillStyle = "#f4f1d0"; ctx.beginPath(); ctx.arc(W * .18, H * .18, cs * 1.6, 0, 7); ctx.fill();
+    ctx.fillStyle = "#13233f"; for (let x = -cs; x < W + cs; x += cs * (1.5 + rnd() * 1.5)) { const h = H * (.3 + rnd() * .3); ctx.beginPath(); ctx.moveTo(x, H); ctx.lineTo(x + cs * 1.2, H - h); ctx.lineTo(x + cs * 2.4, H); ctx.fill(); }
+  }
+  const t = mapTiles(map);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const v = t[r * COLS + c], x = c * cs, y = r * cs;
+    if (v === PSOLID) {
+      ctx.fillStyle = th.dirt; ctx.fillRect(x, y, cs + .5, cs + .5);
+      ctx.fillStyle = th.dot; if ((c * 7 + r * 3) % 5 === 0) ctx.fillRect(x + cs * .3, y + cs * .5, cs * .18, cs * .18);
+      if (r === 0 || t[(r - 1) * COLS + c] !== PSOLID) { ctx.fillStyle = th.top; ctx.fillRect(x, y, cs + .5, cs * .32); }
+    } else if (v === PPLAT) {
+      ctx.fillStyle = th.plank; ctx.fillRect(x, y, cs + .5, cs * .34);
+      ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(x, y + cs * .28, cs + .5, cs * .06);
+    }
+  }
+}
+function renderMaps() {
+  $("#mapGrid").innerHTML = MAPS.map((m, i) => `<button class="mapcard" data-act="map-pick" data-i="${i}"><canvas data-map="${i}"></canvas><b>${esc(m.name)}</b></button>`).join("");
+  document.querySelectorAll("[data-map]").forEach(cv => { const m = MAPS[+cv.dataset.map]; cv.width = IMG_W / 2; cv.height = IMG_H / 2; const ctx = cv.getContext("2d"); paintMap(ctx, m, cv.width, cv.height); const st = { tiles: new Uint8Array(COLS * ROWS), start: m.start, goal: m.goal }; drawFlag(ctx, m.start, cv.width / COLS, "#ffffff", "S"); drawFlag(ctx, m.goal, cv.width / COLS, null, "G"); });
+}
+// 置く画面の状態：{ map, base: マップのマス, art: マップの絵, stickers: [切り抜いたモノ], placed: [置いたモノ], cur: 選んでいるモノ, size }
+let pl = null;
+function startPlace(i) {
+  const map = MAPS[i], art = canvasOf(IMG_W, IMG_H); paintMap(art.getContext("2d"), map, IMG_W, IMG_H);
+  pl = { map, base: mapTiles(map), art, stickers: [], placed: [], cur: -1, size: 6 };
+  $("#placeTitle").textContent = `${map.name}にモノを置く`; $("#stSize").value = pl.size;
+  renderStickers(); show("place"); drawPlace();
+}
+const stickerAlpha = s => (u, v) => s.mask[Math.min(s.h - 1, Math.floor(v * s.h)) * s.w + Math.min(s.w - 1, Math.floor(u * s.w))];
+function placedList() { return pl.placed.map(p => { const s = pl.stickers[p.si]; return { x: p.x, y: p.y, w: p.w, h: p.w * s.h / s.w, alpha: stickerAlpha(s), s }; }); }
+function composite() { // マップの絵＋置いたモノ（保存する写真）
+  const cv = canvasOf(IMG_W, IMG_H), ctx = cv.getContext("2d"), cs = IMG_W / COLS;
+  ctx.drawImage(pl.art, 0, 0);
+  for (const p of placedList()) ctx.drawImage(p.s.cv, (p.x - p.w / 2) * cs, (p.y - p.h) * cs, p.w * cs, p.h * cs);
+  return cv;
+}
+function drawPlace() {
+  const cv = $("#pl"), w = cv.parentElement.clientWidth * DPR() || IMG_W, cs = w / COLS;
+  cv.width = Math.round(w); cv.height = Math.round(cs * ROWS);
+  const ctx = cv.getContext("2d"); ctx.drawImage(composite(), 0, 0, cv.width, cv.height);
+  const t = placeTiles(pl.base, placedList(), pl.map.start, pl.map.goal);
+  ctx.fillStyle = "rgba(255,255,255,.85)"; // 置いたモノの、乗れる上の面（この画面だけ）
+  for (let i = 0; i < t.length; i++) if (t[i] === PPLAT && pl.base[i] !== PPLAT) ctx.fillRect((i % COLS) * cs, ((i / COLS) | 0) * cs, cs, Math.max(2, cs * .12));
+  drawFlag(ctx, pl.map.start, cs, "#ffffff", "S"); drawFlag(ctx, pl.map.goal, cs, null, "G");
+}
+function renderStickers() {
+  const box = $("#stickers"); box.innerHTML = "";
+  pl.stickers.forEach((s, i) => { const b = document.createElement("button"); b.className = "stk" + (i === pl.cur ? " on" : ""); b.dataset.act = "stk-pick"; b.dataset.i = i; b.appendChild(s.cv); box.appendChild(b); });
+}
+// 撮った写真から、まん中のモノだけを切り抜く。AI（U²-Net の軽量版：写真の主役のモノを見つける）が使えればそれで、
+// 使えなければ「写真のふちと同じ色の所＝うしろ」を消す。AI の部品は初めてのときに約16MB を読み込み、2回目からは端末に保存したものを使う
+const ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+let cutLoading = null;
+function loadCut() {
+  if (!cutLoading) cutLoading = (async () => {
+    const ort = await import(ORT + "ort.wasm.min.mjs");
+    ort.env.wasm.wasmPaths = ORT; ort.env.wasm.numThreads = 1;
+    return { ort, sess: await ort.InferenceSession.create("models/u2netp.onnx", { executionProviders: ["wasm"] }) };
+  })().catch(e => { cutLoading = null; throw e; });
+  return cutLoading;
+}
+async function aiCutMask(cv, w, h) {
+  const { ort, sess } = await loadCut(), S = 320, mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225];
+  const sm = canvasOf(S, S), sctx = sm.getContext("2d", { willReadFrequently: true }); sctx.drawImage(cv, 0, 0, S, S);
+  const d = sctx.getImageData(0, 0, S, S).data, inp = new Float32Array(3 * S * S);
+  let mx = 1; for (let i = 0; i < d.length; i += 4) mx = Math.max(mx, d[i], d[i + 1], d[i + 2]);
+  for (let i = 0; i < S * S; i++) for (let k = 0; k < 3; k++) inp[k * S * S + i] = (d[i * 4 + k] / mx - mean[k]) / std[k];
+  const out = await sess.run({ [sess.inputNames[0]]: new ort.Tensor("float32", inp, [1, 3, S, S]) }), o = out[sess.outputNames[0]].data;
+  let lo = Infinity, hi = -Infinity; for (const v of o) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const m = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) m[y * w + x] = (o[Math.floor(y * S / h) * S + Math.floor(x * S / w)] - lo) / (hi - lo + 1e-6) > 0.5 ? 1 : 0;
+  return m;
+}
+function borderCutMask(px, w, h) {
+  const bg = new Uint8Array(w * h), q = [], col = i => [px[i * 4] / 255, px[i * 4 + 1] / 255, px[i * 4 + 2] / 255];
+  const d = (a, b) => { const p = col(a), r = col(b); return Math.hypot(p[0] - r[0], p[1] - r[1], p[2] - r[2]); };
+  for (let x = 0; x < w; x++) for (const y of [0, h - 1]) { const i = y * w + x; if (!bg[i]) { bg[i] = 1; q.push(i); } }
+  for (let y = 0; y < h; y++) for (const x of [0, w - 1]) { const i = y * w + x; if (!bg[i]) { bg[i] = 1; q.push(i); } }
+  for (let k = 0; k < q.length; k++) { const i = q[k], x = i % w, y = (i / w) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue; const j = yy * w + xx; if (!bg[j] && d(i, j) < 0.06) { bg[j] = 1; q.push(j); } } }
+  const m = new Uint8Array(w * h); for (let i = 0; i < w * h; i++) m[i] = bg[i] ? 0 : 1;
+  return m;
+}
+async function cutout(img) {
+  const sc = Math.min(1, 512 / Math.max(img.width, img.height)), w = Math.max(8, Math.round(img.width * sc)), h = Math.max(8, Math.round(img.height * sc));
+  const cv = canvasOf(w, h), ctx = cv.getContext("2d", { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
+  const px = ctx.getImageData(0, 0, w, h);
+  let m = null;
+  try { m = await aiCutMask(cv, w, h); } catch (e) { console.warn(e); }
+  if (!m) m = borderCutMask(px.data, w, h);
+  // まん中に一番近い大きなかたまりだけ残す
+  const lab = new Int32Array(w * h).fill(-1); let best = null;
+  for (let i0 = 0; i0 < w * h; i0++) {
+    if (!m[i0] || lab[i0] >= 0) continue;
+    const comp = [i0]; lab[i0] = i0; let sx = 0, sy = 0;
+    for (let k = 0; k < comp.length; k++) { const i = comp[k], x = i % w, y = (i / w) | 0; sx += x; sy += y;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue; const j = yy * w + xx; if (m[j] && lab[j] < 0) { lab[j] = i0; comp.push(j); } } }
+    const score = comp.length / (w * h) - Math.hypot(sx / comp.length / w - .5, sy / comp.length / h - .5) * .5;
+    if (!best || score > best.score) best = { comp, score };
+  }
+  if (!best || best.comp.length < w * h * 0.01) return null;
+  let x0 = w, y0 = h, x1 = 0, y1 = 0; for (const i of best.comp) { const x = i % w, y = (i / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1, keep = new Uint8Array(w * h); for (const i of best.comp) keep[i] = 1;
+  const out = canvasOf(cw, ch), octx = out.getContext("2d"), od = octx.createImageData(cw, ch), mask = new Uint8Array(cw * ch);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) { const si = (y + y0) * w + x + x0, di = y * cw + x; for (let k = 0; k < 3; k++) od.data[di * 4 + k] = px.data[si * 4 + k]; od.data[di * 4 + 3] = keep[si] ? 255 : 0; mask[di] = keep[si]; }
+  octx.putImageData(od, 0, 0);
+  return { cv: out, mask, w: cw, h: ch };
+}
+$("#objIn").addEventListener("change", async e => {
+  const f = e.target.files?.[0]; e.target.value = ""; if (!f || !pl) return;
+  const url = URL.createObjectURL(f), note = $("#cutNote");
+  note.textContent = "モノを切り抜いています…（初めてのときは AI の準備に約16MBを読み込みます）";
+  try {
+    const s = await cutout(await loadImage(url));
+    if (!s) { note.textContent = "うまく切り抜けませんでした。モノを写真のまん中に大きく撮ってみてください。"; return; }
+    pl.stickers.push(s); pl.cur = pl.stickers.length - 1; renderStickers();
+    note.textContent = "切り抜けました。マップを押して置いてください。";
+  } catch (err) { note.textContent = "この写真は読み込めませんでした"; }
+  finally { setTimeout(() => URL.revokeObjectURL(url), 5000); }
+});
+(() => { // マップを押して置く（押したまま動かすと位置を変える）
+  const cv = $("#pl"); let dragging = null;
+  const at = e => { const r = cv.getBoundingClientRect(); return { x: clamp((e.clientX - r.left) / r.width, 0, 1) * COLS, y: clamp((e.clientY - r.top) / r.height, 0, 1) * ROWS }; };
+  cv.addEventListener("pointerdown", e => {
+    if (!pl) return; e.preventDefault();
+    if (pl.cur < 0) { toast("先に「モノを撮る」で、置くモノを撮ってください"); return; }
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    const p = at(e), s = pl.stickers[pl.cur], h = pl.size * s.h / s.w;
+    dragging = { si: pl.cur, x: p.x, y: p.y + h / 2, w: pl.size }; pl.placed.push(dragging); drawPlace();
+  });
+  cv.addEventListener("pointermove", e => { if (!dragging) return; const p = at(e), s = pl.stickers[dragging.si]; dragging.x = p.x; dragging.y = p.y + dragging.w * s.h / s.w / 2; drawPlace(); });
+  const end = () => { dragging = null; }; cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+})();
+$("#stSize").addEventListener("input", e => { if (!pl) return; pl.size = +e.target.value; const last = pl.placed[pl.placed.length - 1]; if (last) { const s = pl.stickers[last.si], oh = last.w * s.h / s.w, nh = pl.size * s.h / s.w; last.y += (nh - oh) / 2; last.w = pl.size; } drawPlace(); });
+// 置き終わったら、ふつうのコースと同じように「テストプレイしてクリアしたら保存」へ
+function finishPlace() {
+  const photo = composite(), tiles = placeTiles(pl.base, placedList(), pl.map.start, pl.map.goal), st = { tiles, start: { ...pl.map.start }, goal: { ...pl.map.goal } };
+  const cps = reach(st).ok ? placeCheckpoints(st) : [];
+  const name = `${pl.map.name}${pl.placed.length ? "＋モノ" : ""}`;
+  startMake({ photo, stage: { tiles, start: st.start, goal: st.goal, cps, name, opts: { ...DEFAULT_OPTS, ai: false, obj: false } } });
+  mk.fromMap = true; syncPanel();
+}
+
 // fix = true のときは、ゴールまで届くか調べて、届かなければ足場を足す（スライダーを動かしている途中は軽い方だけ）
 // 調べるのに時間がかかることがあるので、先に「調べています」を出してから少しあとで調べる
 let fixToken = 0;
@@ -1010,7 +1249,8 @@ function syncPanel() {
   const im = mk.photo, cropped = Math.abs(im.width / im.height - COLS / ROWS) > 0.02;
   $("#focusRule").hidden = mk.fixedCrop || !cropped;
   $("#autoGroup").classList.toggle("locked", mk.edited);
-  $("#lockNote").hidden = !mk.edited;
+  $("#autoGroup").hidden = !!mk.fromMap; // マップのコースは写真から作り直せない
+  $("#lockNote").hidden = !mk.edited || !!mk.fromMap;
   showReach(); showAI();
   $("#tools").innerHTML = TOOLS.map((t, i) => `<button class="tool ${mk.tool === t.k ? "on" : ""}" data-tool="${i}"><i style="background:${t.sw}"></i>${t.label}</button>`).join("");
 }
@@ -1184,7 +1424,7 @@ function layoutPlay() {
   run.cs = cs; run.ox = (W - cs * COLS) / 2; run.oy = (H - cs * ROWS) / 2;
   run.layer = canvasOf(1, 1); paintStage(run.layer, run.stage, cs * COLS);
 }
-addEventListener("resize", () => { if (run) layoutPlay(); if (mk && !$("#make").hidden) drawMake(); });
+addEventListener("resize", () => { if (pl && !$("#place").hidden) drawPlace(); if (run) layoutPlay(); if (mk && !$("#make").hidden) drawMake(); });
 function loop(ts) {
   if (!run) return;
   const dt = run.last == null || run.tuning ? 0 : Math.min(0.05, (ts - run.last) / 1000); run.last = ts; // 調整中は止める
@@ -1403,6 +1643,11 @@ document.addEventListener("click", async e => {
   if (el.dataset.tool) { mk.tool = TOOLS[+el.dataset.tool].k; syncPanel(); return; }
   const i = el.dataset.i != null ? +el.dataset.i : null;
   switch (el.dataset.act) {
+    case "map-pick": startPlace(i); break;
+    case "stk-pick": pl.cur = i; renderStickers(); break;
+    case "place-undo": pl.placed.pop(); drawPlace(); break;
+    case "place-back": if (!pl.placed.length || confirm("置いたモノを捨てて、マップ選びに戻りますか？")) { pl = null; show("maps"); } break;
+    case "place-done": finishPlace(); break;
     case "make-back": if (!mk.edited || confirm("作りかけのコースを捨てますか？")) { mk = null; show("home"); } break;
     case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); if (!mk.det) detectObjects(); } break;
     case "undo": { const u = mk.undo.pop(); if (u) { Object.assign(mk, u); mk.cleared = null; drawMake(); checkReach(); } break; }
@@ -1496,7 +1741,7 @@ function appFeel(name) {
 addEventListener("popstate", () => {
   if (ignorePop) { ignorePop = false; return; }
   const cur = curScreen(); if (cur === "home") return;
-  const act = { play: "exit", make: "make-back", online: "net-leave" }[cur];
+  const act = { play: "exit", make: "make-back", online: "net-leave", place: "place-back" }[cur];
   if (act) document.querySelector(`#${cur} [data-act="${act}"]`)?.click(); else show("home");
   if (curScreen() !== "home" && !history.state?.pa) history.pushState({ pa: 1 }, ""); // やめるのを取り消したとき
 });
