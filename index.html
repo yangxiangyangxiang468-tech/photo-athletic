@@ -210,7 +210,8 @@ h3 { margin: 0; font-size: 16px; }
         <div class="group" id="autoGroup">
           <h3>写真から自動で作る</h3>
           <div class="rule" id="focusRule"><label>写真の位置</label><input type="range" min="0" max="100" data-opt="focus"><small>写真の上下（左右）どこをコースに使うか</small></div>
-          <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 建物・モノ → 地面</label><input type="range" min="10" max="100" data-opt="objAmt"><small>物そのものに乗れる（屋根・机・棚の上を歩ける）。空や壁とモノの見分けの強さ</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="ai"> AI でモノを見つける → 地面</label><small id="aiNote"></small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 空や壁 ↔ モノを見分ける → 地面</label><input type="range" min="10" max="100" data-opt="objAmt"><small>空や壁の前にある建物・モノに乗れる。見分けの強さ</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="edge"> 物のふち → 薄い足場</label><input type="range" min="2" max="30" data-opt="edgeAmt"><small>下からすり抜けて乗れる足場</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="dark"> 暗い所 → 地面</label><input type="range" min="0" max="45" data-opt="darkAmt"><small>紙にペンで描いて撮ると自分でコースが描ける</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="color"> 色 → しかけ</label><input type="range" min="0" max="100" data-opt="colorAmt"><small>赤 = トゲ　青 = 水　緑 = ジャンプ台</small></div>
@@ -272,7 +273,7 @@ h3 { margin: 0; font-size: 16px; }
 // ==ENGINE START== （ここから ==ENGINE END== までは画面に触らない処理。node でテストできる）
 const COLS = 40, ROWS = 22;               // コースは 40×22 マス（横長 16:9 くらい）
 const E = 0, SOLID = 1, PLAT = 2, SPIKE = 3, WATER = 4, BOUNCE = 5;
-const DEFAULT_OPTS = { focus: 50, obj: true, objAmt: 50, edge: true, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
+const DEFAULT_OPTS = { focus: 50, ai: true, obj: true, objAmt: 50, edge: true, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
 // 動きの数値（単位はマス・秒）。ジャンプは約3.4マス、ジャンプ台は約7マス
 const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.12, BUF: 0.15 }; // COYOTE: 落ちた直後でも跳べる時間、BUF: 着地の少し前に押したジャンプも効く時間
 const STEP = 1 / 120;
@@ -341,9 +342,14 @@ function objectMask(f, amt) {
 }
 
 // 写真の特徴と設定からマスを決める。優先順位：色のしかけ ＞ 暗い所の地面 ＞ 建物・モノ ＞ ふちの足場
-function buildTiles(f, o) {
+// det: AI が見つけたモノの範囲（マス単位 { c0, r0, c1, r1 }、両端をふくむ）。見つけたモノは写っている範囲まるごと地面にする
+function buildTiles(f, o, det = null) {
   const N = COLS * ROWS, t = new Uint8Array(N);
-  const m = o.obj && o.objAmt > 0 ? objectMask(f, o.objAmt) : null;
+  let m = o.obj && o.objAmt > 0 ? objectMask(f, o.objAmt) : null;
+  if (o.ai && det?.length) {
+    if (!m) m = new Uint8Array(N);
+    for (const b of det) for (let r = Math.max(0, b.r0); r <= Math.min(ROWS - 1, b.r1); r++) for (let c = Math.max(0, b.c0); c <= Math.min(COLS - 1, b.c1); c++) m[r * COLS + c] = 1;
+  }
   if (m) {
     // 建物・モノそのものを地面（乗れて、通り抜けられないかたまり）にする。屋根・机・棚の上を歩ける
     // ただし、1マス幅の細い縦の物（電柱・棒）は壁にならないように消し、1マスの厚さしかない横の物（電線・手すり）はすり抜けられる薄い足場に
@@ -393,7 +399,13 @@ function buildTiles(f, o) {
       else if (h >= 185 && h <= 255) cls[i] = WATER;
       else if (h >= 75 && h <= 165) cls[i] = BOUNCE;
     }
-    for (let i = 0; i < N; i++) if (cls[i] === WATER || (cls[i] && (i < COLS || cls[i - COLS] !== cls[i]))) t[i] = cls[i];
+    // モノがあるときは、そのモノの上の面だけ（かたまりの中に穴をあけない）
+    for (let i = 0; i < N; i++) {
+      if (!cls[i]) continue;
+      if (m) { if (i >= COLS && m[i - COLS]) continue; }
+      else if (cls[i] !== WATER && i >= COLS && cls[i - COLS] === cls[i]) continue;
+      t[i] = cls[i];
+    }
   }
   const start = findSpot(t, true), goal = findSpot(t, false);
   normalize(t, start, goal);
@@ -785,10 +797,10 @@ $("#photoIn").addEventListener("change", async e => {
   finally { setTimeout(() => URL.revokeObjectURL(url), 5000); }
 });
 function startMake({ photo, stage }) {
-  mk = { photo, opts: { ...DEFAULT_OPTS, ...(stage?.opts || {}) }, tool: "obj", undo: [], cleared: null, id: stage?.id || null, name: stage?.name || "", fixedCrop: !!stage, from: stage?.from || "mine", author: stage?.author || null };
+  mk = { photo, opts: { ...DEFAULT_OPTS, ...(stage?.opts || {}) }, tool: SOLID, undo: [], cleared: null, id: stage?.id || null, name: stage?.name || "", fixedCrop: !!stage, from: stage?.from || "mine", author: stage?.author || null };
   refit();
   if (stage) { mk.tiles = Uint8Array.from(stage.tiles); mk.start = { ...stage.start }; mk.goal = { ...stage.goal }; mk.cps = cleanCps(stage.cps); mk.edited = true; mk.cleared = stage.best || null; }
-  else regen();
+  else { regen(); detectObjects(); }
   if (stage) mk.reach = { ok: reach({ tiles: mk.tiles, start: mk.start, goal: mk.goal }).ok, added: 0 };
   show("make"); syncPanel(); drawMake();
 }
@@ -802,11 +814,53 @@ function refit() {
   mk.px = sx.getImageData(0, 0, small.width, small.height).data; mk.pxW = small.width; mk.pxH = small.height;
   mk.feat = cellFeatures(mk.px, small.width, small.height);
 }
+// ---------- AI でモノを見つける（COCO-SSD：パソコン・テレビ・机・椅子・本・コップ・車など80種類） ----------
+// 初めて使うときに AI の部品（約20MB）を読み込む。2回目からは端末に保存したものを使う（sw.js）。読み込めないときは今までのやり方だけで作る
+const AI_LIBS = ["https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js", "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"];
+const AI_NAMES = { laptop: "ノートパソコン", tv: "モニター", keyboard: "キーボード", mouse: "マウス", "cell phone": "スマホ", book: "本", cup: "コップ", bottle: "ボトル", chair: "椅子", couch: "ソファ", bed: "ベッド", "dining table": "机", bench: "ベンチ", car: "車", truck: "トラック", bus: "バス", train: "電車", bicycle: "自転車", person: "人", "potted plant": "植木", clock: "時計", vase: "花びん", backpack: "リュック", suitcase: "スーツケース", refrigerator: "冷蔵庫", microwave: "電子レンジ", oven: "オーブン", sink: "流し", toilet: "トイレ", dog: "犬", cat: "猫", bird: "鳥" };
+let aiLoading = null;
+function loadScript(src) { return new Promise((ok, ng) => { const el = document.createElement("script"); el.src = src; el.crossOrigin = "anonymous"; el.onload = ok; el.onerror = ng; document.head.appendChild(el); }); }
+function loadAI() {
+  if (!aiLoading) aiLoading = (async () => { for (const u of AI_LIBS) await loadScript(u); return await window.cocoSsd.load({ base: "lite_mobilenet_v2" }); })().catch(e => { aiLoading = null; throw e; });
+  return aiLoading;
+}
+// mk.fit（コースに使う範囲の写真）からモノを探して mk.det に入れ、作り直す
+async function detectObjects() {
+  if (!mk || !mk.opts.ai) return;
+  const my = mk, fit = mk.fit, token = (mk.detToken = (mk.detToken || 0) + 1);
+  my.aiState = "loading"; showAI();
+  try {
+    const model = await loadAI();
+    if (mk !== my || my.detToken !== token) return;
+    my.aiState = "busy"; showAI();
+    const preds = await model.detect(fit, 20, 0.45);
+    if (mk !== my || my.detToken !== token) return;
+    const sx = COLS / fit.width, sy = ROWS / fit.height;
+    my.det = preds.filter(p => p.bbox[2] * sx >= 1.5 && p.bbox[3] * sy >= 1.5).map(p => { const [x, y, w, h] = p.bbox;
+      return { c0: Math.round(x * sx), r0: Math.round(y * sy), c1: Math.round((x + w) * sx) - 1, r1: Math.round((y + h) * sy) - 1, name: AI_NAMES[p.class] || p.class }; });
+    my.aiState = "done"; showAI();
+    if (!my.edited) { regen(); drawMake(); syncPanel(); }
+  } catch (e) {
+    if (mk !== my) return;
+    my.aiState = "error"; showAI();
+  }
+}
+function showAI() {
+  const el = $("#aiNote"); if (!el || !mk) return;
+  const names = [...new Set((mk.det || []).map(d => d.name))];
+  el.textContent = !mk.opts.ai ? "パソコン・机・椅子などを見つけて、そのモノを丸ごと地面にする"
+    : mk.aiState === "loading" ? "AI を準備しています…（初めてのときは約20MBを読み込みます）"
+    : mk.aiState === "busy" ? "AI がモノを探しています…"
+    : mk.aiState === "error" ? "AI を読み込めませんでした（電波を確認してください）。今までのやり方で作っています"
+    : mk.aiState === "done" ? (names.length ? `見つけたモノ：${names.join("・")}` : "AI はモノを見つけられませんでした")
+    : "パソコン・机・椅子などを見つけて、そのモノを丸ごと地面にする";
+}
+
 // fix = true のときは、ゴールまで届くか調べて、届かなければ足場を足す（スライダーを動かしている途中は軽い方だけ）
 // 調べるのに時間がかかることがあるので、先に「調べています」を出してから少しあとで調べる
 let fixToken = 0;
 function regen(fix = true) {
-  const r = buildTiles(mk.feat, mk.opts); mk.tiles = r.tiles; mk.start = r.start; mk.goal = r.goal; mk.edited = false; mk.cleared = null;
+  const r = buildTiles(mk.feat, mk.opts, mk.det); mk.tiles = r.tiles; mk.start = r.start; mk.goal = r.goal; mk.edited = false; mk.cleared = null;
   mk.cps = [];
   const token = ++fixToken;
   if (!fix) { mk.reach = null; return; }
@@ -834,7 +888,7 @@ function syncPanel() {
   $("#focusRule").hidden = mk.fixedCrop || !cropped;
   $("#autoGroup").classList.toggle("locked", mk.edited);
   $("#lockNote").hidden = !mk.edited;
-  showReach();
+  showReach(); showAI();
   $("#tools").innerHTML = TOOLS.map((t, i) => `<button class="tool ${mk.tool === t.k ? "on" : ""}" data-tool="${i}"><i style="background:${t.sw}"></i>${t.label}</button>`).join("");
 }
 function drawMake() { const cv = $("#mk"); paintStage(cv, { tiles: mk.tiles, start: mk.start, goal: mk.goal, imgEl: mk.imgEl }, cv.parentElement.clientWidth * DPR(), true); }
@@ -842,10 +896,11 @@ document.addEventListener("input", e => {
   const k = e.target.dataset?.opt; if (!k || !mk) return;
   mk.opts[k] = e.target.type === "checkbox" ? e.target.checked : +e.target.value;
   if (k === "focus") refit();
-  regen(false); drawMake(); showReach();
+  regen(false); drawMake(); showReach(); showAI();
 });
 document.addEventListener("change", e => { // 指を離したときに、ゴールまで届くように整える
   if (!e.target.dataset?.opt || !mk) return;
+  if (e.target.dataset.opt === "focus" || (e.target.dataset.opt === "ai" && mk.opts.ai && !mk.det)) { mk.det = null; detectObjects(); } // 写真の範囲が変わったら探し直す
   regen(true); drawMake(); showReach();
 });
 // 指で描く（ドラッグの途中のマスも埋める）
@@ -1219,7 +1274,7 @@ document.addEventListener("click", async e => {
   const i = el.dataset.i != null ? +el.dataset.i : null;
   switch (el.dataset.act) {
     case "make-back": if (!mk.edited || confirm("作りかけのコースを捨てますか？")) { mk = null; show("home"); } break;
-    case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); } break;
+    case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); if (!mk.det) detectObjects(); } break;
     case "autofix": { // 手で描いたあとでも、届かない所に足場を足す
       mk.undo.push({ tiles: mk.tiles.slice(), start: { ...mk.start }, goal: { ...mk.goal }, cps: mk.cps.map(k => ({ ...k })) });
       mk.reach = { pending: true }; showReach();

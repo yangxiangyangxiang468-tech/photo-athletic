@@ -1,5 +1,5 @@
 // オフラインでも開けるようにするサービスワーカー
-// index.html は「通信できれば最新、だめなら保存済み」、ほかのファイル（PeerJS・フォント・アイコン）は保存済みを優先
+// index.html は「通信できれば最新、だめなら保存済み」、ほかのファイル（PeerJS・フォント・アイコン・AI）は保存済みを優先
 const CACHE = "photo-athletic-v1";
 const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png",
   "https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"];
@@ -14,7 +14,9 @@ self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  const cacheable = url.origin === location.origin || /^(cdnjs\.cloudflare\.com|fonts\.googleapis\.com|fonts\.gstatic\.com)$/.test(url.hostname);
+  // AI の部品（cdn.jsdelivr.net の tfjs・coco-ssd、storage.googleapis.com のモデル）も、一度読み込んだら端末に保存して次から使う
+  const cacheable = url.origin === location.origin || /^(cdnjs\.cloudflare\.com|fonts\.googleapis\.com|fonts\.gstatic\.com|cdn\.jsdelivr\.net)$/.test(url.hostname)
+    || (url.hostname === "storage.googleapis.com" && url.pathname.startsWith("/tfjs-models/"));
   if (!cacheable) return; // PeerJS の接続サーバーなどには手を出さない
   const put = res => { if (res.ok || res.type === "opaque") { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); } return res; };
   if (req.mode === "navigate") {
