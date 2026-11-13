@@ -335,6 +335,8 @@ function objectMask(f, amt) {
       for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const rr = r + dr, cc = c + dc; if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) continue; const j = rr * COLS + cc; if (m[j] && !seen[j]) { seen[j] = 1; comp.push(j); } } }
     if (comp.length <= 2) for (const k of comp) m[k] = 0;
   }
+  // ほとんど全部がモノになったら、うしろを見分けられなかった（柄のある壁紙など）とみなして使わない（画面じゅうが地面になるのを防ぐ）
+  if (m.reduce((a, v) => a + v, 0) > N * 0.75) return null;
   return m;
 }
 
@@ -624,6 +626,45 @@ function placeCheckpoints(st) {
   return cps;
 }
 const cleanCps = a => Array.isArray(a) ? a.filter(p => p && Number.isInteger(p.c) && Number.isInteger(p.r) && p.c >= 0 && p.c < COLS && p.r >= 1 && p.r < ROWS).slice(0, 5).map(p => ({ c: p.c, r: p.r })) : [];
+// 押した所から、似た色でつながっている範囲（＝そのモノの形）を探して、マスの集合（1 = モノ）で返す。写真のどこにあるモノでも選べる。
+// px: 幅 W・高さ H の RGBA。fx, fy: 押した位置（0〜1）。ざらつきを抑えるため 2×2 にまとめてから広げる
+function selectRegion(px, W, H, fx, fy) {
+  const w = W >> 1, h = H >> 1, n = w * h, col = new Float32Array(n * 3);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let ch = 0; ch < 3; ch++) {
+    let sum = 0; for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) sum += px[((y * 2 + dy) * W + x * 2 + dx) * 4 + ch];
+    col[(y * w + x) * 3 + ch] = sum / 4 / 255;
+  }
+  const sx = clamp(Math.floor(fx * w), 0, w - 1), sy = clamp(Math.floor(fy * h), 0, h - 1), seed = sy * w + sx;
+  const d = (a, b) => Math.hypot(col[a * 3] - col[b * 3], col[a * 3 + 1] - col[b * 3 + 1], col[a * 3 + 2] - col[b * 3 + 2]);
+  const sel = new Uint8Array(n), q = [seed], mean = [col[seed * 3], col[seed * 3 + 1], col[seed * 3 + 2]];
+  sel[seed] = 1;
+  for (let i = 0; i < q.length; i++) {
+    const k = q[i], x = k % w, y = (k / w) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const j = yy * w + xx; if (sel[j]) continue;
+      const dm = Math.hypot(col[j * 3] - mean[0], col[j * 3 + 1] - mean[1], col[j * 3 + 2] - mean[2]);
+      if ((d(k, j) < 0.07 && dm < 0.22) || dm < 0.16) { // となりと近い色（なだらかな影はつながる）か、モノ全体の色に近い（木目や柄はまたげる）
+        sel[j] = 1; q.push(j);
+        const m = q.length; for (let ch = 0; ch < 3; ch++) mean[ch] += (col[j * 3 + ch] - mean[ch]) / m;
+      }
+    }
+  }
+  // マスごとに、4割以上が選ばれていればそのマスはモノ
+  const cw = w / COLS, ch = h / ROWS, out = new Uint8Array(COLS * ROWS);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    let a = 0, t = 0;
+    for (let y = Math.floor(r * ch); y < Math.floor((r + 1) * ch); y++) for (let x = Math.floor(c * cw); x < Math.floor((c + 1) * cw); x++) { a += sel[y * w + x]; t++; }
+    if (t && a / t >= 0.4) out[r * COLS + c] = 1;
+  }
+  // 1マスのすき間（左右か上下が両方モノ）は埋める
+  const fill = out.slice();
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const i = r * COLS + c; if (out[i]) continue;
+    if ((c > 0 && c < COLS - 1 && out[i - 1] && out[i + 1]) || (r > 0 && r < ROWS - 1 && out[i - COLS] && out[i + COLS])) fill[i] = 1;
+  }
+  return { cells: fill, share: q.length / n };
+}
 // ==ENGINE END==
 
 // ---------- 小道具 ----------
@@ -730,6 +771,7 @@ const dehydrate = st => { const { imgEl, ...rest } = st; return { ...rest, tiles
 // ---------- コースを作る ----------
 let mk = null; // { photo, fit, feat, opts, tiles, start, goal, edited, tool, undo, cleared, id, name, fixedCrop, imgEl }
 const TOOLS = [
+  { k: "obj", label: "モノを選ぶ", sw: "linear-gradient(135deg,#fff 0 45%,rgba(16,15,12,.55) 45%)" },
   { k: SOLID, label: "地面", sw: "rgba(16,15,12,.75)" }, { k: PLAT, label: "薄い足場", sw: "#ffd23f" }, { k: SPIKE, label: "トゲ", sw: "#ff3b30" }, { k: WATER, label: "水", sw: "#2f6fed" },
   { k: BOUNCE, label: "ジャンプ台", sw: "#2fbf55" }, { k: E, label: "消す", sw: "#fff" }, { k: "start", label: "スタート", sw: "#fff" }, { k: "goal", label: "ゴール", sw: "repeating-linear-gradient(90deg,#000 0 4px,#fff 4px 8px)" },
   { k: "cp", label: "旗（途中）", sw: "#ffd23f" },
@@ -743,7 +785,7 @@ $("#photoIn").addEventListener("change", async e => {
   finally { setTimeout(() => URL.revokeObjectURL(url), 5000); }
 });
 function startMake({ photo, stage }) {
-  mk = { photo, opts: { ...DEFAULT_OPTS, ...(stage?.opts || {}) }, tool: SOLID, undo: [], cleared: null, id: stage?.id || null, name: stage?.name || "", fixedCrop: !!stage, from: stage?.from || "mine", author: stage?.author || null };
+  mk = { photo, opts: { ...DEFAULT_OPTS, ...(stage?.opts || {}) }, tool: "obj", undo: [], cleared: null, id: stage?.id || null, name: stage?.name || "", fixedCrop: !!stage, from: stage?.from || "mine", author: stage?.author || null };
   refit();
   if (stage) { mk.tiles = Uint8Array.from(stage.tiles); mk.start = { ...stage.start }; mk.goal = { ...stage.goal }; mk.cps = cleanCps(stage.cps); mk.edited = true; mk.cleared = stage.best || null; }
   else regen();
@@ -757,7 +799,8 @@ function refit() {
   mk.fit = fit; mk.imgEl = fit;
   const small = canvasOf(COLS * 8, ROWS * 8), sx = small.getContext("2d", { willReadFrequently: true });
   sx.drawImage(fit, 0, 0, small.width, small.height);
-  mk.feat = cellFeatures(sx.getImageData(0, 0, small.width, small.height).data, small.width, small.height);
+  mk.px = sx.getImageData(0, 0, small.width, small.height).data; mk.pxW = small.width; mk.pxH = small.height;
+  mk.feat = cellFeatures(mk.px, small.width, small.height);
 }
 // fix = true のときは、ゴールまで届くか調べて、届かなければ足場を足す（スライダーを動かしている途中は軽い方だけ）
 // 調べるのに時間がかかることがあるので、先に「調べています」を出してから少しあとで調べる
@@ -782,6 +825,7 @@ function showReach() {
   const el = $("#reachNote"), r = mk.reach;
   el.hidden = !r; if (!r) return;
   el.className = "reach " + (r.pending ? "" : r.ok ? "ok" : "ng");
+  if (!r.pending && !r.ok) { el.innerHTML = `⚠ このままだとゴールに届かないかもしれません。<button class="btn sm" data-act="autofix">足場を自動で足す</button>`; return; }
   el.textContent = r.pending ? "… ゴールまで行けるか調べています" : r.ok ? `✓ ゴールまで行けるコースです${r.added ? `（届かない所に足場を${r.added}つ足しました）` : ""}` : "⚠ このままだとゴールに届かないかもしれません。指で足場を足してください";
 }
 function syncPanel() {
@@ -807,10 +851,11 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
 // 指で描く（ドラッグの途中のマスも埋める）
 (() => {
   const cv = $("#mk"); let last = null;
-  const cellOf = e => { const r = cv.getBoundingClientRect(); return { c: clamp(Math.floor((e.clientX - r.left) / r.width * COLS), 0, COLS - 1), r: clamp(Math.floor((e.clientY - r.top) / r.height * ROWS), 0, ROWS - 1) }; };
+  const cellOf = e => { const r = cv.getBoundingClientRect(), fx = clamp((e.clientX - r.left) / r.width, 0, 0.9999), fy = clamp((e.clientY - r.top) / r.height, 0, 0.9999); return { c: Math.floor(fx * COLS), r: Math.floor(fy * ROWS), fx, fy }; };
   const paint = (p) => {
     const tool = mk.tool;
     if (tool === "start" || tool === "goal") { if (p.r < 1) p.r = 1; mk[tool] = p; normalize(mk.tiles, mk[tool]); return; }
+    if (tool === "obj") { pickObject(p); return; }
     if (tool === "cp") { // 押した所に旗を立てる。旗の上を押すと消す（5本まで）
       if (p.r < 1) p.r = 1;
       const i = mk.cps.findIndex(k => Math.abs(k.c - p.c) <= 1 && Math.abs(k.r - p.r) <= 1);
@@ -833,12 +878,25 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
     if (!mk || !last) return;
     const p = cellOf(e), n = Math.max(Math.abs(p.c - last.c), Math.abs(p.r - last.r));
     if (!n) return;
-    if (mk.tool === "cp") return;
+    if (mk.tool === "cp" || mk.tool === "obj") return;
     if (mk.tool === "start" || mk.tool === "goal") paint(p);
     else for (let i = 1; i <= n; i++) paint({ c: Math.round(last.c + (p.c - last.c) * i / n), r: Math.round(last.r + (p.r - last.r) * i / n) });
     last = p; drawMake();
   });
   const end = () => { if (last) { last = null; normalize(mk.tiles, mk.start, mk.goal, ...mk.cps); dropUnsafeFlags(); drawMake(); checkReach(); } };
+  // 押したモノを地面にする（1マスの厚さしかない所はすり抜けられる薄い足場）
+  function pickObject(p) {
+    if (!mk.px) return;
+    const { cells, share } = selectRegion(mk.px, mk.pxW, mk.pxH, p.fx ?? (p.c + 0.5) / COLS, p.fy ?? (p.r + 0.5) / ROWS);
+    if (share > 0.6) { toast("背景ごと選ばれてしまいました。モノのまん中あたりを押してください"); return; }
+    let n = 0;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c; if (!cells[i]) continue;
+      const thin = r > 0 && r < ROWS - 1 && !cells[i - COLS] && !cells[i + COLS];
+      mk.tiles[i] = thin ? PLAT : SOLID; n++;
+    }
+    if (!n) toast("小さすぎて選べませんでした。もう少し大きなモノを押してください");
+  }
   function dropUnsafeFlags() { // 描き直して足場が無くなった旗は外す
     const st = { tiles: mk.tiles, start: mk.start, goal: mk.goal }, n = mk.cps.length;
     mk.cps = mk.cps.filter(k => safeSpot(st, k));
@@ -1162,6 +1220,19 @@ document.addEventListener("click", async e => {
   switch (el.dataset.act) {
     case "make-back": if (!mk.edited || confirm("作りかけのコースを捨てますか？")) { mk = null; show("home"); } break;
     case "unlock": if (confirm("手で描いた分を消して、写真から作り直しますか？")) { regen(); syncPanel(); drawMake(); } break;
+    case "autofix": { // 手で描いたあとでも、届かない所に足場を足す
+      mk.undo.push({ tiles: mk.tiles.slice(), start: { ...mk.start }, goal: { ...mk.goal }, cps: mk.cps.map(k => ({ ...k })) });
+      mk.reach = { pending: true }; showReach();
+      setTimeout(() => {
+        if (!mk) return;
+        const st = { tiles: mk.tiles, start: mk.start, goal: mk.goal }, before = mk.tiles.reduce((n, v) => n + (v === PLAT), 0);
+        const ok = ensureClearable(st, 30, 3000);
+        mk.reach = { ok, added: Math.max(0, Math.round((mk.tiles.reduce((n, v) => n + (v === PLAT), 0) - before) / 3)) };
+        mk.cleared = null; drawMake(); showReach();
+        if (!ok) toast("自動ではつなげませんでした。指で足場を足してください");
+      }, 40);
+      break;
+    }
     case "undo": { const u = mk.undo.pop(); if (u) { Object.assign(mk, u); mk.cleared = null; drawMake(); checkReach(); } break; }
     case "test": runTest(); break;
     case "retest": runTest(); break;
