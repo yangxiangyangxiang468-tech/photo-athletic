@@ -211,7 +211,7 @@ h3 { margin: 0; font-size: 16px; }
           <h3>写真から自動で作る</h3>
           <div class="rule" id="focusRule"><label>写真の位置</label><input type="range" min="0" max="100" data-opt="focus"><small>写真の上下（左右）どこをコースに使うか</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="ai"> AI でモノを見つける → 地面</label><small id="aiNote"></small></div>
-          <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 空や壁 ↔ モノを見分ける → 地面</label><input type="range" min="10" max="100" data-opt="objAmt"><small>空や壁の前にある建物・モノに乗れる。見分けの強さ</small></div>
+          <div class="rule"><label class="chk"><input type="checkbox" data-opt="obj"> 空や壁 ↔ モノを見分ける → 地面</label><input type="range" min="10" max="100" data-opt="objAmt"><small>空や壁の前にある建物・モノの上に乗れる。見分けの強さ</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="edge"> 物のふち → 薄い足場（最初はオフ）</label><input type="range" min="2" max="30" data-opt="edgeAmt"><small>下からすり抜けて乗れる足場</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="dark"> 暗い所 → 地面</label><input type="range" min="0" max="45" data-opt="darkAmt"><small>紙にペンで描いて撮ると自分でコースが描ける</small></div>
           <div class="rule"><label class="chk"><input type="checkbox" data-opt="color"> 色 → しかけ</label><input type="range" min="0" max="100" data-opt="colorAmt"><small>赤 = トゲ　青 = 水　緑 = ジャンプ台</small></div>
@@ -390,15 +390,31 @@ function buildTiles(f, o, det = null) {
     for (let i = 0; i < N; i++) if (det.cells[i]) m[i] = 1;
   }
   if (m) {
-    // 建物・モノそのものを地面（乗れて、通り抜けられないかたまり）にする。屋根・机・棚の上を歩ける
-    // ただし、1マス幅の細い縦の物（電柱・棒）は壁にならないように消し、1マスの厚さしかない横の物（電線・手すり）はすり抜けられる薄い足場に
-    const at = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS && m[r * COLS + c];
-    const m2 = new Uint8Array(N);
-    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (at(r, c) && (at(r, c - 1) || at(r, c + 1))) m2[r * COLS + c] = 1;
-    const at2 = (r, c) => r >= 0 && r < ROWS && m2[r * COLS + c];
+    // 見えない壁を作らない：モノの「上の面」だけに乗れて、横や下からはすり抜けられる（モノの前を通れる）。
+    // モノが重なっているとき（机の上のパソコン）は、AI の塗り分けでモノごとに上の面を出す（パソコンの後ろの机の面も残る）
+    const raw = new Int16Array(N); for (let i = 0; i < N; i++) if (m[i]) raw[i] = det?.labels?.[i] || 999;
+    // モノの名前のばらつきをならす（まわり9マスで一番多い名前）
+    const lab = new Int16Array(N);
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-      if (!m2[r * COLS + c]) continue;
-      t[r * COLS + c] = r > 0 && r < ROWS - 1 && !at2(r - 1, c) && !at2(r + 1, c) ? PPLAT : PSOLID;
+      const i = r * COLS + c; if (!m[i]) continue;
+      const cnt = new Map(); for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const rr = r + dr, cc = c + dc; if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) continue; const v = raw[rr * COLS + cc]; if (v) cnt.set(v, (cnt.get(v) || 0) + 1); }
+      let bv = raw[i], bn = 0; for (const [v, n] of cnt) if (n > bn) { bv = v; bn = n; } lab[i] = bv;
+    }
+    // 上の面：すぐ上がモノでない所（見えている上の面）。それと、別のモノに隠れた面のうち、同じモノの上の面が同じ高さで外にも見えている所（パソコンの後ろの机）
+    const open = new Uint8Array(N), seenTop = new Map(), top = new Uint8Array(N);
+    for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) { const i = r * COLS + c; if (m[i] && !m[i - COLS]) { open[i] = 1; seenTop.set(lab[i] * 100 + r, 1); } }
+    for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c; if (!m[i]) continue;
+      if (open[i]) top[i] = 1;
+      else if (lab[i - COLS] !== lab[i] && lab[i] !== 999 && lab[i - COLS] !== 999 && [r - 1, r, r + 1].some(rr => seenTop.has(lab[i] * 100 + rr))) top[i] = 2; // 隠れた面（候補）
+    }
+    // 隠れた面は、横に3マス以上続くときだけ（モノの中に細かい足場ができないように）
+    for (let r = 2; r < ROWS; r++) { let c = 0; while (c < COLS) { if (top[r * COLS + c] !== 2) { c++; continue; } let e = c; while (e < COLS && top[r * COLS + e] === 2) e++; if (e - c < 3) for (let x = c; x < e; x++) top[r * COLS + x] = 0; c = e; } }
+    for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      if (!top[r * COLS + c]) continue;
+      let nb = false; // 1マスだけ飛び出た先っぽ（アンテナ・電柱）には乗らない
+      for (let dr = -1; dr <= 1 && !nb; dr++) for (const dc of [-1, 1]) { const rr = r + dr, cc = c + dc; if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS && top[rr * COLS + cc]) nb = true; }
+      if (nb) t[r * COLS + c] = PPLAT;
     }
   }
   if (o.dark && o.darkAmt > 0) {
@@ -441,7 +457,7 @@ function buildTiles(f, o, det = null) {
     // モノがあるときは、そのモノの上の面だけ（かたまりの中に穴をあけない）
     for (let i = 0; i < N; i++) {
       if (!cls[i]) continue;
-      if (m) { if (i >= COLS && m[i - COLS]) continue; }
+      if (m) { if (t[i] !== PPLAT) continue; } // モノの上の面だけ
       else if (cls[i] !== WATER && i >= COLS && cls[i - COLS] === cls[i]) continue;
       t[i] = cls[i];
     }
@@ -496,7 +512,13 @@ function normalize(t, ...spots) {
 function tileAt(t, c, r) { if (c < 0 || c >= COLS || r < 0) return SOLID; if (r >= ROWS) return E; return t[r * COLS + c]; }
 const isSolid = v => v === SOLID || v === BOUNCE || v === PSOLID;
 // at: 出てくる場所（チェックポイント）。無ければスタート
-function spawn(st, at = st.start) { return { x: at.c + 0.5 - PH.W / 2, y: at.r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: false, coyote: 0, buf: 0, cut: false, face: 1, dead: 0, water: false }; }
+function spawn(st, at = st.start) { return { x: at.c + 0.5 - PH.W / 2, y: at.r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: false, coyote: 0, buf: 0, cut: false, face: 1, dead: 0, water: false, kick: 0 }; }
+// 横に壁（地面のマス・写真の左右の端）が触れているか。side: -1 = 左, 1 = 右
+function touchWall(p, t, side) {
+  const c = side < 0 ? Math.floor(p.x - 0.05) : Math.floor(p.x + PH.W + 0.05);
+  for (let r = Math.floor(p.y + 0.1); r <= Math.floor(p.y + PH.H - 0.1); r++) if (isSolid(tileAt(t, c, r))) return true;
+  return false;
+}
 // 1コマ進める。inp = { l, r, j: 押している, jp: 今押した }。戻り値 "die" | "goal" | "cp"（新しいチェックポイントに触れた） | null
 // p.cp = 最後に触れたチェックポイントの番号。ミスするとそこから出てくる
 function stepPlayer(p, st, inp, dt) {
@@ -506,14 +528,20 @@ function stepPlayer(p, st, inp, dt) {
   const dir = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
   if (dir) p.face = dir;
   const max = PH.RUN * (p.water ? 0.6 : 1);
-  p.vx = dir ? approach(p.vx, dir * max, (p.ground ? PH.ACC : PH.AIR) * dt) : approach(p.vx, 0, (p.ground ? PH.FRIC : PH.AIR * 0.5) * dt);
+  if (p.kick > 0) p.kick -= dt; // 壁を蹴った直後は、少しのあいだ横の操作が効かない（すぐ壁に戻らないように）
+  else p.vx = dir ? approach(p.vx, dir * max, (p.ground ? PH.ACC : PH.AIR) * dt) : approach(p.vx, 0, (p.ground ? PH.FRIC : PH.AIR * 0.5) * dt);
   p.buf = inp.jp ? PH.BUF : Math.max(0, p.buf - dt);
   p.coyote = p.ground ? PH.COYOTE : Math.max(0, p.coyote - dt);
   if (p.water) { if (p.buf > 0) { p.vy = -PH.SWIM; p.buf = 0; p.cut = false; } }
   else if (p.buf > 0 && p.coyote > 0) { p.vy = -PH.JV; p.buf = 0; p.coyote = 0; p.cut = true; }
+  else if (p.buf > 0 && !p.ground) { // 壁ジャンプ：空中で壁に触れていたら、壁を蹴って反対へ跳ぶ
+    const wl = touchWall(p, t, -1), wr = touchWall(p, t, 1);
+    if (wl || wr) { const away = wl && !wr ? 1 : !wl && wr ? -1 : -p.face; p.vy = -PH.JV * 0.92; p.vx = away * PH.RUN; p.face = away; p.buf = 0; p.cut = true; p.kick = 0.14; }
+  }
   if (p.cut && !inp.j && p.vy < 0) { p.vy *= 0.45; p.cut = false; } // ボタンを早く離すと低いジャンプ
   if (p.vy >= 0) p.cut = false;
   p.vy = Math.min(p.water ? 3.5 : PH.MAXF, p.vy + PH.G * (p.water ? 0.3 : 1) * dt);
+  if (!p.ground && !p.water && p.vy > 4 && dir && touchWall(p, t, dir)) p.vy = 4; // 壁に向かって押していると、ゆっくりずり落ちる
   // 横
   p.x += p.vx * dt;
   { const r0 = Math.floor(p.y + 1e-6), r1 = Math.floor(p.y + PH.H - 1e-6);
@@ -557,18 +585,27 @@ const PLANS = (() => {
     for (const hold of [0.05, 0.15, 9]) L.push({ d, hold });
     L.push({ d, hold: 9, delay: 0.22 });  // まっすぐ跳んでから横へ（真上の足場に乗る）
     L.push({ d, swim: true });            // 水の中で何度も跳ぶ
+    L.push({ d, hold: 9, wall: "away" }); // 壁を蹴って反対へ
+    L.push({ d, hold: 9, wall: "back" }); // 壁を蹴って、また同じ壁へ戻る（1つの壁をよじ登る）
   }
   for (const hold of [0.15, 9]) L.push({ d: 0, hold });
   return L;
 })();
 function simFrom(st, c, r, plan, out, box) { // box: 通ったマスの範囲 [左, 上, 右, 下] を広げていく
-  const p = { x: c + 0.5 - PH.W / 2, y: r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: true, coyote: PH.COYOTE, buf: 0, cut: false, face: 1, dead: 0, water: false };
+  const p = { x: c + 0.5 - PH.W / 2, y: r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: true, coyote: PH.COYOTE, buf: 0, cut: false, face: 1, dead: 0, water: false, kick: 0 };
   const inp = { l: false, r: false, j: false, jp: false };
-  let t = 0, left = false;
+  let t = 0, left = false, wdir = plan.d, kicks = 0, kickT = -1;
   for (let i = 0; i < 300; i++, t += STEP) {
-    const dir = plan.delay && t < plan.delay ? 0 : plan.d;
+    let dir = plan.delay && t < plan.delay ? 0 : plan.d;
+    let kickNow = false;
+    if (plan.wall) {
+      if (plan.wall === "back" && kickT >= 0 && t - kickT > 0.12) wdir = plan.d;
+      if (!p.ground && i > 0 && kicks < 6 && touchWall(p, st.tiles, wdir)) { kickNow = true; kicks++; kickT = t; wdir = -wdir; }
+      dir = wdir;
+    }
     inp.l = dir < 0; inp.r = dir > 0;
     if (plan.walk) inp.j = inp.jp = false;
+    else if (plan.wall) { inp.jp = i === 0 || kickNow; inp.j = true; }
     else if (plan.swim) { inp.jp = i % 18 === 0; inp.j = inp.jp; }
     else { inp.jp = i === 0; inp.j = t < plan.hold; }
     const ev = stepPlayer(p, st, inp, STEP);
@@ -907,18 +944,20 @@ async function detectObjects() {
     my.aiState = "busy"; showAI();
     const out = await seg(RawImage.fromCanvas(fit));
     if (mk !== my || my.detToken !== token) return;
-    const N = COLS * ROWS, hit = new Float32Array(N), tot = new Float32Array(N), names = [];
-    for (const o of out) {
-      const d = o.mask.data, w = o.mask.width, h = o.mask.height, isObj = !SEG_BG.has(o.label);
+    const N = COLS * ROWS, hit = new Float32Array(N), tot = new Float32Array(N), best = new Float32Array(N), labels = new Int16Array(N), names = [];
+    out.forEach((o, li) => {
+      const d = o.mask.data, w = o.mask.width, h = o.mask.height, isObj = !SEG_BG.has(o.label), cnt = new Float32Array(N);
       let n = 0;
       for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const k = Math.floor(y * ROWS / h) * COLS + Math.floor(x * COLS / w), on = d[y * w + x] ? 1 : 0;
-        if (on) { tot[k]++; if (isObj) { hit[k]++; n++; } }
+        if (!d[y * w + x]) continue;
+        const k = Math.floor(y * ROWS / h) * COLS + Math.floor(x * COLS / w);
+        tot[k]++; if (isObj) { hit[k]++; cnt[k]++; n++; }
       }
+      if (isObj) for (let k = 0; k < N; k++) if (cnt[k] > best[k]) { best[k] = cnt[k]; labels[k] = li + 1; } // マスごとに一番多いモノ
       if (isObj && n > w * h * 0.004) names.push(AI_NAMES[o.label] || o.label);
-    }
+    });
     const cells = new Uint8Array(N); for (let k = 0; k < N; k++) if (tot[k] && hit[k] / tot[k] >= 0.5) cells[k] = 1;
-    my.det = { cells, names };
+    my.det = { cells, labels, names };
     my.aiState = "done"; showAI();
     if (!my.edited) { regen(); drawMake(); syncPanel(); }
   } catch (e) {
@@ -1029,10 +1068,9 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
     const { cells, share } = selectRegion(mk.px, mk.pxW, mk.pxH, p.fx ?? (p.c + 0.5) / COLS, p.fy ?? (p.r + 0.5) / ROWS);
     if (share > 0.6) { toast("背景ごと選ばれてしまいました。モノのまん中あたりを押してください"); return; }
     let n = 0;
-    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-      const i = r * COLS + c; if (!cells[i]) continue;
-      const thin = r > 0 && r < ROWS - 1 && !cells[i - COLS] && !cells[i + COLS];
-      mk.tiles[i] = thin ? PPLAT : PSOLID; n++;
+    for (let r = 1; r < ROWS; r++) for (let c = 0; c < COLS; c++) { // そのモノの上の面に乗れる（すり抜けられる）
+      const i = r * COLS + c; if (!cells[i] || cells[i - COLS]) continue;
+      mk.tiles[i] = PPLAT; n++;
     }
     if (!n) toast("小さすぎて選べませんでした。もう少し大きなモノを押してください");
   }
