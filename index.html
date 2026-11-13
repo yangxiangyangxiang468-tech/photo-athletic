@@ -345,31 +345,49 @@ function objectMask(f, amt) {
 }
 
 // 写真の特徴と設定からマスを決める。優先順位：色のしかけ ＞ 暗い所の地面 ＞ 建物・モノ ＞ ふちの足場
-// AI の四角の中から、まわり（四角のすぐ外）と同じ色で続いている所＝うしろを削って、モノの形に近づける
-function refineBox(f, b) {
-  const N = COLS * ROWS, c0 = Math.max(0, b.c0), r0 = Math.max(0, b.r0), c1 = Math.min(COLS - 1, b.c1), r1 = Math.min(ROWS - 1, b.r1);
-  const box = new Uint8Array(N), bg = new Uint8Array(N), q = [];
-  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) box[r * COLS + c] = 1;
-  const dist = (a, b2) => Math.hypot(f.rgb[a * 3] - f.rgb[b2 * 3], f.rgb[a * 3 + 1] - f.rgb[b2 * 3 + 1], f.rgb[a * 3 + 2] - f.rgb[b2 * 3 + 2]);
-  const smooth = i => !f.tex || f.tex[i] < 0.09;
-  const step = (from, j) => { if (!box[j] || bg[j]) return; if (smooth(j) && dist(from, j) < 0.07) { bg[j] = 1; q.push(j); } };
-  // 四角のすぐ外のマスから、内側へ塗り広げる（写真の端に接している辺は、外が無いので広げない）
-  for (let r = r0; r <= r1; r++) { if (c0 > 0) step(r * COLS + c0 - 1, r * COLS + c0); if (c1 < COLS - 1) step(r * COLS + c1 + 1, r * COLS + c1); }
-  for (let c = c0; c <= c1; c++) { if (r0 > 0) step((r0 - 1) * COLS + c, r0 * COLS + c); if (r1 < ROWS - 1) step((r1 + 1) * COLS + c, r1 * COLS + c); }
-  for (let h = 0; h < q.length; h++) { const i = q[h], r = (i / COLS) | 0, c = i % COLS;
-    if (c > 0) step(i, i - 1); if (c < COLS - 1) step(i, i + 1); if (r > 0) step(i, i - COLS); if (r < ROWS - 1) step(i, i + COLS); }
-  let n = 0, k = 0; for (let i = 0; i < N; i++) if (box[i]) { n++; if (!bg[i]) k++; }
-  if (k < n * 0.3) return box; // 削りすぎ（モノと背景が同じ色）のときは四角のまま
-  for (let i = 0; i < N; i++) if (bg[i]) box[i] = 0;
-  return box;
+// すべてのモノに判定：写真を色のつながりで領域に分け、「広くて平らな面」（壁・床・空・天井）だけをうしろとみなし、
+// それ以外はぜんぶモノにする。写真の上につながっていなくてもよい（机の天板・小物・棚もモノになる）
+function objectMaskAll(f, amt) {
+  const N = COLS * ROWS, s = amt / 100;
+  if (!f.tex) return null;
+  const step = 0.11 - 0.06 * s, flat = 0.05 + 0.05 * (1 - s), minArea = Math.round(N * (0.05 + 0.04 * s));
+  const dist = (a, b) => Math.hypot(f.rgb[a * 3] - f.rgb[b * 3], f.rgb[a * 3 + 1] - f.rgb[b * 3 + 1], f.rgb[a * 3 + 2] - f.rgb[b * 3 + 2]);
+  const comp = new Int32Array(N).fill(-1), m = new Uint8Array(N).fill(1);
+  let id = 0;
+  for (let i0 = 0; i0 < N; i0++) {
+    if (comp[i0] >= 0) continue;
+    const q = [i0]; comp[i0] = id; let tex = 0, top = false;
+    for (let h = 0; h < q.length; h++) {
+      const i = q[h], r = (i / COLS) | 0, c = i % COLS; tex += f.tex[i]; if (r === 0) top = true;
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const rr = r + dr, cc = c + dc; if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) continue;
+        const j = rr * COLS + cc; if (comp[j] >= 0) continue;
+        if (dist(i, j) < step && Math.abs(f.tex[i] - f.tex[j]) < 0.05) { comp[j] = id; q.push(j); }
+      }
+    }
+    const smooth = tex / q.length < flat;
+    if (smooth && (q.length >= minArea || (top && q.length >= minArea / 2))) for (const i of q) m[i] = 0; // 広くて平ら＝うしろ
+    id++;
+  }
+  // 2マス以下の小さな塊は消す
+  const seen = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    if (!m[i] || seen[i]) continue;
+    const cc = [i]; seen[i] = 1;
+    for (let h = 0; h < cc.length; h++) { const k = cc[h], r = (k / COLS) | 0, c = k % COLS;
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const rr = r + dr, c2 = c + dc; if (rr < 0 || rr >= ROWS || c2 < 0 || c2 >= COLS) continue; const j = rr * COLS + c2; if (m[j] && !seen[j]) { seen[j] = 1; cc.push(j); } } }
+    if (cc.length <= 2) for (const k of cc) m[k] = 0;
+  }
+  if (m.reduce((a, v) => a + v, 0) > N * 0.85) return null; // ほとんど全部がモノ＝見分けられなかった
+  return m;
 }
-// det: AI が見つけたモノの範囲（マス単位 { c0, r0, c1, r1 }、両端をふくむ）。見つけたモノは写っている範囲まるごと地面にする
+// det: AI が見つけたモノのマス（{ cells: Uint8Array（1 = モノ）, names }）。写っているモノの形どおりに地面にする
 function buildTiles(f, o, det = null) {
   const N = COLS * ROWS, t = new Uint8Array(N);
   let m = o.obj && o.objAmt > 0 ? objectMask(f, o.objAmt) : null;
-  if (o.ai && det?.length) {
+  if (o.ai && det?.cells) {
     if (!m) m = new Uint8Array(N);
-    for (const b of det) { const k = refineBox(f, b); for (let i = 0; i < N; i++) if (k[i]) m[i] = 1; }
+    for (let i = 0; i < N; i++) if (det.cells[i]) m[i] = 1;
   }
   if (m) {
     // 建物・モノそのものを地面（乗れて、通り抜けられないかたまり）にする。屋根・机・棚の上を歩ける
@@ -847,46 +865,62 @@ function refit() {
   mk.px = sx.getImageData(0, 0, small.width, small.height).data; mk.pxW = small.width; mk.pxH = small.height;
   mk.feat = cellFeatures(mk.px, small.width, small.height);
 }
-// ---------- AI でモノを見つける（COCO-SSD：パソコン・テレビ・机・椅子・本・コップ・車など80種類） ----------
-// 初めて使うときに AI の部品（約20MB）を読み込む。2回目からは端末に保存したものを使う（sw.js）。読み込めないときは今までのやり方だけで作る
-const AI_LIBS = ["https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js", "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"];
-const AI_NAMES = { laptop: "ノートパソコン", tv: "モニター", keyboard: "キーボード", mouse: "マウス", "cell phone": "スマホ", book: "本", cup: "コップ", bottle: "ボトル", chair: "椅子", couch: "ソファ", bed: "ベッド", "dining table": "机", bench: "ベンチ", car: "車", truck: "トラック", bus: "バス", train: "電車", bicycle: "自転車", person: "人", "potted plant": "植木", clock: "時計", vase: "花びん", backpack: "リュック", suitcase: "スーツケース", refrigerator: "冷蔵庫", microwave: "電子レンジ", oven: "オーブン", sink: "流し", toilet: "トイレ", dog: "犬", cat: "猫", bird: "鳥" };
+// ---------- AI でモノを見つける（SegFormer ADE20K：写真を1点ずつ「壁・床・空…」か「机・パソコン・椅子…」に塗り分ける） ----------
+// 壁・床・天井・空・窓などの「うしろ」以外は、ぜんぶモノ（当たり判定あり）にする。
+// 初めて使うときに AI の部品（約27MB）を読み込む。2回目からは端末に保存したものを使う。読み込めないときは今までのやり方だけで作る
+const SEG_LIB = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
+const SEG_MODEL = "Xenova/segformer-b0-finetuned-ade-512-512";
+const SEG_BG = new Set(["wall", "floor", "ceiling", "sky", "windowpane", "curtain", "blind", "rug", "road", "sidewalk", "grass", "earth", "field", "sand", "path", "dirt track", "runway", "water", "sea", "river", "lake", "mountain", "hill", "land", "painting", "mirror", "door", "screen door", "poster", "bulletin board"]);
+const AI_NAMES = { computer: "パソコン", "television receiver": "テレビ", "crt screen": "画面", monitor: "モニター", screen: "画面", desk: "机", table: "テーブル", chair: "椅子", "swivel chair": "椅子", armchair: "ひじかけ椅子", seat: "座席", sofa: "ソファ", bed: "ベッド", cabinet: "棚", shelf: "棚", bookcase: "本棚", "chest of drawers": "たんす", wardrobe: "たんす", book: "本", lamp: "ライト", box: "箱", bottle: "ボトル", glass: "コップ", vase: "花びん", plant: "植物", flower: "花", "pot": "鉢", tree: "木", palm: "ヤシの木", building: "建物", house: "家", skyscraper: "ビル", tower: "塔", car: "車", truck: "トラック", bus: "バス", van: "ワゴン車", bicycle: "自転車", person: "人", fireplace: "暖炉", radiator: "ラジエーター", refrigerator: "冷蔵庫", stove: "コンロ", oven: "オーブン", microwave: "電子レンジ", sink: "流し", basket: "かご", counter: "カウンター", "kitchen island": "キッチン台", bench: "ベンチ", stairs: "階段", stairway: "階段", step: "段", railing: "手すり", fence: "フェンス", rock: "岩", bag: "かばん", clock: "時計", fan: "扇風機", pillow: "まくら", cushion: "クッション", toilet: "トイレ", bathtub: "浴そう", towel: "タオル", "trade name": "看板", signboard: "看板", streetlight: "街灯", pole: "柱", column: "柱", boat: "ボート", ship: "船", airplane: "飛行機", animal: "動物", dog: "犬", cat: "猫", ball: "ボール", food: "食べもの", plate: "皿", tray: "トレー", "kitchen": "台所" };
 let aiLoading = null;
-function loadScript(src) { return new Promise((ok, ng) => { const el = document.createElement("script"); el.src = src; el.crossOrigin = "anonymous"; el.onload = ok; el.onerror = ng; document.head.appendChild(el); }); }
 function loadAI() {
-  if (!aiLoading) aiLoading = (async () => { for (const u of AI_LIBS) await loadScript(u); return await window.cocoSsd.load({ base: "lite_mobilenet_v2" }); })().catch(e => { aiLoading = null; throw e; });
+  if (!aiLoading) aiLoading = (async () => {
+    const T = await import(SEG_LIB);
+    T.env.allowLocalModels = false;
+    return { seg: await T.pipeline("image-segmentation", SEG_MODEL, { dtype: "q8" }), RawImage: T.RawImage };
+  })().catch(e => { aiLoading = null; throw e; });
   return aiLoading;
 }
-// mk.fit（コースに使う範囲の写真）からモノを探して mk.det に入れ、作り直す
+// mk.fit（コースに使う範囲の写真）を塗り分けて、モノのマス（半分以上がモノ）を mk.det に入れ、作り直す
 async function detectObjects() {
   if (!mk || !mk.opts.ai) return;
   const my = mk, fit = mk.fit, token = (mk.detToken = (mk.detToken || 0) + 1);
   my.aiState = "loading"; showAI();
   try {
-    const model = await loadAI();
+    const { seg, RawImage } = await loadAI();
     if (mk !== my || my.detToken !== token) return;
     my.aiState = "busy"; showAI();
-    const preds = await model.detect(fit, 20, 0.45);
+    const out = await seg(RawImage.fromCanvas(fit));
     if (mk !== my || my.detToken !== token) return;
-    const sx = COLS / fit.width, sy = ROWS / fit.height;
-    my.det = preds.filter(p => p.bbox[2] * sx >= 1.5 && p.bbox[3] * sy >= 1.5).map(p => { const [x, y, w, h] = p.bbox;
-      return { c0: Math.round(x * sx), r0: Math.round(y * sy), c1: Math.round((x + w) * sx) - 1, r1: Math.round((y + h) * sy) - 1, name: AI_NAMES[p.class] || p.class }; });
+    const N = COLS * ROWS, hit = new Float32Array(N), tot = new Float32Array(N), names = [];
+    for (const o of out) {
+      const d = o.mask.data, w = o.mask.width, h = o.mask.height, isObj = !SEG_BG.has(o.label);
+      let n = 0;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const k = Math.floor(y * ROWS / h) * COLS + Math.floor(x * COLS / w), on = d[y * w + x] ? 1 : 0;
+        if (on) { tot[k]++; if (isObj) { hit[k]++; n++; } }
+      }
+      if (isObj && n > w * h * 0.004) names.push(AI_NAMES[o.label] || o.label);
+    }
+    const cells = new Uint8Array(N); for (let k = 0; k < N; k++) if (tot[k] && hit[k] / tot[k] >= 0.5) cells[k] = 1;
+    my.det = { cells, names };
     my.aiState = "done"; showAI();
     if (!my.edited) { regen(); drawMake(); syncPanel(); }
   } catch (e) {
+    console.warn(e);
     if (mk !== my) return;
     my.aiState = "error"; showAI();
   }
 }
 function showAI() {
   const el = $("#aiNote"); if (!el || !mk) return;
-  const names = [...new Set((mk.det || []).map(d => d.name))];
-  el.textContent = !mk.opts.ai ? "パソコン・机・椅子などを見つけて、そのモノを丸ごと地面にする"
-    : mk.aiState === "loading" ? "AI を準備しています…（初めてのときは約20MBを読み込みます）"
+  const names = [...new Set(mk.det?.names || [])];
+  el.textContent = !mk.opts.ai ? "壁・床・空のほかは、写っているモノぜんぶに乗れるようにする"
+    : mk.aiState === "loading" ? "AI を準備しています…（初めてのときは約27MBを読み込みます）"
     : mk.aiState === "busy" ? "AI がモノを探しています…"
     : mk.aiState === "error" ? "AI を読み込めませんでした（電波を確認してください）。今までのやり方で作っています"
     : mk.aiState === "done" ? (names.length ? `見つけたモノ：${names.join("・")}` : "AI はモノを見つけられませんでした")
-    : "パソコン・机・椅子などを見つけて、そのモノを丸ごと地面にする";
+    : "壁・床・空のほかは、写っているモノぜんぶに乗れるようにする";
 }
 
 // fix = true のときは、ゴールまで届くか調べて、届かなければ足場を足す（スライダーを動かしている途中は軽い方だけ）
