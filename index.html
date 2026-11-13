@@ -123,6 +123,7 @@ h3 { margin: 0; font-size: 16px; }
   background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 12px 12px; }
 .stk.on { border-color: var(--ink); box-shadow: 0 0 0 3px var(--sun); }
 .stk canvas { max-width: 100%; max-height: 100%; display: block; }
+#stFx { border: 2px solid var(--ink); border-radius: 10px; padding: 6px 8px; background: var(--card); font-weight: 700; }
 .mapcard { background: var(--card); border: 2px solid var(--ink); border-radius: 6px; padding: 8px 8px 12px; box-shadow: var(--shadow); display: grid; gap: 8px; cursor: pointer; text-align: left; }
 .mapcard canvas { width: 100%; display: block; border: 1px solid var(--ink); }
 .reach { margin: 0; font-size: 13.5px; font-weight: 700; border-radius: 10px; padding: 8px 10px; border: 2px solid var(--ink); }
@@ -260,6 +261,7 @@ h3 { margin: 0; font-size: 16px; }
           <input type="file" id="objIn" accept="image/*" class="vh">
           <p class="note" id="cutNote">コップ・ぬいぐるみ・本・くつなど。モノを写真のまん中に大きく撮ってください。</p>
           <div class="stickers" id="stickers"></div>
+          <div class="rule" id="fxRule" hidden><label>このモノの効果</label><select id="stFx"></select><small id="fxNote"></small></div>
         </div>
         <div class="group">
           <h3>2. マップを押して置く</h3>
@@ -268,7 +270,7 @@ h3 { margin: 0; font-size: 16px; }
           <div class="btns"><button class="btn sm" data-act="place-undo">1つ戻す</button></div>
         </div>
         <div class="btns"><button class="btn big primary" data-act="place-done">▶ 置き終わった</button></div>
-        <p class="note">置いたモノの上に乗れます（横や下からはすり抜けます）。</p>
+        <p class="note">置いたモノの上に乗れます（横や下からはすり抜けます）。AI がモノを見分けて効果をつけます（キーボード：ランダムジャンプ、ぬいぐるみ：ぽよん、くつ：速く走れる、コップ：つるつる）。</p>
       </div>
     </div>
   </div>
@@ -319,6 +321,8 @@ const COLS = 40, ROWS = 22;               // コースは 40×22 マス（横長
 const E = 0, SOLID = 1, PLAT = 2, SPIKE = 3, WATER = 4, BOUNCE = 5;
 // 写真から作った地面・薄い足場。はたらきは SOLID・PLAT と同じだが、遊ぶ画面では何も描かない（写真のまま、写っているモノに乗る）
 const PSOLID = 6, PPLAT = 7;
+// 撮ったモノの効果つきの足場（見えない・上の面だけ乗れる）。8: 踏むとランダムでハイジャンプかロージャンプ、9: ぽよんと跳ねる、10: 速く走れる、11: つるつる滑る
+const PRAND = 8, PSPRING = 9, PFAST = 10, PSLIP = 11;
 const DEFAULT_OPTS = { focus: 50, ai: true, obj: true, objAmt: 50, edge: false, edgeAmt: 8, dark: false, darkAmt: 18, color: true, colorAmt: 40 };
 // 動きの数値（単位はマス・秒）。ジャンプは約3.4マス、ジャンプ台は約7マス
 const PH = { G: 55, JV: 19.4, RUN: 8.5, ACC: 70, AIR: 45, FRIC: 60, MAXF: 22, W: 0.6, H: 0.85, BV: 27.7, SWIM: 8.5, COYOTE: 0.12, BUF: 0.15 }; // COYOTE: 落ちた直後でも跳べる時間、BUF: 着地の少し前に押したジャンプも効く時間
@@ -353,8 +357,8 @@ function cellFeatures(d, W, H) {
   return { lum, edge, tex, rgb };
 }
 
-const standable = v => v === SOLID || v === PLAT || v === BOUNCE || v === PSOLID || v === PPLAT;
-const isPlat = v => v === PLAT || v === PPLAT;
+const isPlat = v => v === PLAT || v === PPLAT || (v >= PRAND && v <= PSLIP);
+const standable = v => v === SOLID || v === BOUNCE || v === PSOLID || isPlat(v);
 // 空や壁などの「うしろ」を写真の上から塗り広げて見つけ、残った所を建物・モノとみなす（1 = モノ）
 function objectMask(f, amt) {
   const N = COLS * ROWS, s = amt / 100, bg = new Uint8Array(N), q = [];
@@ -556,7 +560,7 @@ function normalize(t, ...spots) {
 function tileAt(t, c, r) { if (c < 0 || c >= COLS || r < 0) return SOLID; if (r >= ROWS) return E; return t[r * COLS + c]; }
 const isSolid = v => v === SOLID || v === BOUNCE || v === PSOLID;
 // at: 出てくる場所（チェックポイント）。無ければスタート
-function spawn(st, at = st.start) { return { x: at.c + 0.5 - PH.W / 2, y: at.r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: false, coyote: 0, buf: 0, cut: false, face: 1, dead: 0, water: false, kick: 0 }; }
+function spawn(st, at = st.start) { return { x: at.c + 0.5 - PH.W / 2, y: at.r + 1 - PH.H - 0.001, vx: 0, vy: 0, ground: false, coyote: 0, buf: 0, cut: false, face: 1, dead: 0, water: false, kick: 0, surf: 0 }; }
 // 横に壁（地面のマス・写真の左右の端）が触れているか。side: -1 = 左, 1 = 右
 function touchWall(p, t, side) {
   const c = side < 0 ? Math.floor(p.x - 0.05) : Math.floor(p.x + PH.W + 0.05);
@@ -571,9 +575,10 @@ function stepPlayer(p, st, inp, dt) {
   p.water = tileAt(t, Math.floor(p.x + PH.W / 2), Math.floor(p.y + PH.H / 2)) === WATER;
   const dir = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
   if (dir) p.face = dir;
-  const max = PH.RUN * (p.water ? 0.6 : 1);
+  const surf = p.ground ? p.surf : 0, fast = surf === PFAST, slip = surf === PSLIP; // 乗っている足場の効果
+  const max = PH.RUN * (p.water ? 0.6 : 1) * (fast ? 1.7 : 1);
   if (p.kick > 0) p.kick -= dt; // 壁を蹴った直後は、少しのあいだ横の操作が効かない（すぐ壁に戻らないように）
-  else p.vx = dir ? approach(p.vx, dir * max, (p.ground ? PH.ACC : PH.AIR) * dt) : approach(p.vx, 0, (p.ground ? PH.FRIC : PH.AIR * 0.5) * dt);
+  else p.vx = dir ? approach(p.vx, dir * max, (p.ground ? PH.ACC * (slip ? 0.35 : fast ? 1.4 : 1) : PH.AIR) * dt) : approach(p.vx, 0, (p.ground ? PH.FRIC * (slip ? 0.06 : 1) : PH.AIR * 0.5) * dt);
   p.buf = inp.jp ? PH.BUF : Math.max(0, p.buf - dt);
   p.coyote = p.ground ? PH.COYOTE : Math.max(0, p.coyote - dt);
   if (p.water) { if (p.buf > 0) { p.vy = -PH.SWIM; p.buf = 0; p.cut = false; } }
@@ -596,9 +601,20 @@ function stepPlayer(p, st, inp, dt) {
   p.y += p.vy * dt; p.ground = false;
   { const c0 = Math.floor(p.x + 1e-6), c1 = Math.floor(p.x + PH.W - 1e-6);
     if (p.vy > 0) {
-      const r = Math.floor(p.y + PH.H - 1e-6); let land = false, bounce = false;
-      for (let c = c0; c <= c1; c++) { const v = tileAt(t, c, r); if (isSolid(v) || (isPlat(v) && prevB <= r + 1e-3)) { land = true; if (v === BOUNCE) bounce = true; } }
-      if (land) { p.y = r - PH.H; p.vy = 0; p.ground = true; if (bounce) { p.vy = -PH.BV; p.ground = false; } }
+      // 地面はマスの上のふち、薄い足場は「マスの中の高さ」（st.off：撮ったモノの見た目の上のふち）に乗る
+      const nb = p.y + PH.H, r = Math.floor(nb - 1e-6); let landY = Infinity, kind = 0;
+      for (let c = c0; c <= c1; c++) { const v = tileAt(t, c, r); if (isSolid(v) && r < landY) { landY = r; kind = v; } }
+      for (let rr = Math.floor(prevB - 1e-6); rr <= Math.floor(nb); rr++) for (let c = c0; c <= c1; c++) {
+        const v = tileAt(t, c, rr); if (!isPlat(v)) continue;
+        const sy = rr + (st.off ? st.off[rr * COLS + c] || 0 : 0);
+        if (prevB <= sy + 1e-3 && nb >= sy && sy < landY) { landY = sy; kind = v; }
+      }
+      if (landY < Infinity) {
+        p.y = landY - PH.H; p.vy = 0; p.ground = true; p.surf = kind;
+        if (kind === BOUNCE) { p.vy = -PH.BV; p.ground = false; }
+        else if (kind === PSPRING) { p.vy = -PH.BV * 0.8; p.ground = false; p.fx = "spring"; }
+        else if (kind === PRAND) { const hi = (st.rand || Math.random)() < 0.5; p.vy = hi ? -PH.BV * 1.05 : -PH.JV * 0.5; p.ground = false; p.fx = hi ? "hi" : "lo"; }
+      }
     } else if (p.vy < 0) {
       const r = Math.floor(p.y + 1e-6);
       for (let c = c0; c <= c1; c++) if (isSolid(tileAt(t, c, r))) { p.y = r + 1; p.vy = 0; break; }
@@ -615,8 +631,8 @@ function stepPlayer(p, st, inp, dt) {
     if (p.cp !== i && p.x < k.c + 1 && p.x + PH.W > k.c && p.y < k.r + 1 && p.y + PH.H > k.r - 1) { p.cp = i; return "cp"; } }
   return null;
 }
-const tilesToStr = t => Array.from(t).join("");
-const strToTiles = s => Uint8Array.from(s, ch => +ch);
+const tilesToStr = t => Array.from(t, v => v.toString(36)).join(""); // 1マス1文字（10以上は a, b…）
+const strToTiles = s => Uint8Array.from(s, ch => parseInt(ch, 36) || 0);
 // ---------- クリアできるかを調べて、届かなければ足場を足す ----------
 // 立てる場所（足元が足場で、そのマスが空いている所）から、いろいろな操作を実際の動き（stepPlayer）で試して、着地できる場所をたどる。
 // 標準の動きより弱いジャンプ・遅い足で調べる（調整パネルで変えた値は使わない）。止まった状態からの操作だけなので、
@@ -674,6 +690,7 @@ function expand(st, k) {
 const boxHit = (b, d) => b[0] <= d[2] && d[0] <= b[2] && b[1] <= d[3] && d[1] <= b[3];
 // cache: 前に調べた結果（Map）。dirty: 変えたマスの範囲。その範囲を通った結果だけ調べ直す。新しく調べた結果は fresh に入れる
 function reach(st, cache = null, dirty = null, fresh = null) {
+  st = { ...st, rand: () => 0.99 }; // ランダムジャンプは、弱い方（ロージャンプ）が出るものとして調べる
   const saved = { ...PH }; Object.assign(PH, PH_EASY);
   try {
     const N = COLS * ROWS, seen = new Uint8Array(N), par = new Int32Array(N).fill(-1), q = [st.start.r * COLS + st.start.c];
@@ -748,7 +765,7 @@ function safeSpot(st, at) {
   if (!at || at.r < 1 || at.r >= ROWS - 1 || at.c < 0 || at.c >= COLS) return false;
   const saved = { ...PH }; Object.assign(PH, PH_STD);
   try {
-    const p = spawn(st, at), inp = { l: false, r: false, j: false, jp: false }, s2 = { ...st, cps: [] };
+    const p = spawn(st, at), inp = { l: false, r: false, j: false, jp: false }, s2 = { ...st, cps: [], rand: () => 0.99 };
     for (let i = 0; i < 120; i++) { const ev = stepPlayer(p, s2, inp, STEP); if (ev === "die" || p.dead > 0) return false; }
     return p.ground && Math.abs(p.y + PH.H - (at.r + 1)) < 0.02; // 旗の足元に立っている（下へ落ちていない）
   } finally { Object.assign(PH, saved); }
@@ -830,22 +847,30 @@ function mapTiles(map) {
   for (const [a, b, r] of map.plats || []) for (let c = a; c <= b; c++) t[r * COLS + c] = PPLAT;
   return t;
 }
-// 置いたモノ（切り抜いた写真）が覆うマスを調べて、その上の面に乗れるようにする。
-// placed: [{ x: 横のまん中, y: 下のふち, w: 横の幅（マス）, h: 縦の高さ（マス）, alpha: (u, v) => 0〜1 の不透明さ（u, v は 0〜1） }]
-function placeTiles(base, placed, start, goal) {
-  const N = COLS * ROWS, t = base.slice(), obj = new Uint8Array(N);
+// 置いたモノ（切り抜いた写真）の見た目の上のふちに、ぴったり乗れる足場を作る。戻り値 { tiles, off }（off: マスの中の高さ 0〜0.9）
+// placed: [{ x: 横のまん中, y: 下のふち, w: 横の幅（マス）, h: 縦の高さ（マス）, alpha: (u, v) => 0〜1 の不透明さ（u, v は 0〜1）, code: 足場の種類 }]
+function placeTiles(base, placed, start, goal, baseOff = null) {
+  const N = COLS * ROWS, t = base.slice(), off = baseOff ? baseOff.slice() : new Float32Array(N), best = new Float32Array(N).fill(Infinity);
   for (const p of placed) {
-    const x0 = p.x - p.w / 2, y0 = p.y - p.h;
-    for (let r = Math.max(0, Math.floor(y0)); r <= Math.min(ROWS - 1, Math.floor(p.y)); r++) for (let c = Math.max(0, Math.floor(x0)); c <= Math.min(COLS - 1, Math.floor(x0 + p.w)); c++) {
-      let n = 0; // マスの中の 4×4 点のうち、モノが写っている点の割合
-      for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) { const u = (c + (b + 0.5) / 4 - x0) / p.w, v = (r + (a + 0.5) / 4 - y0) / p.h; if (u >= 0 && u < 1 && v >= 0 && v < 1 && p.alpha(u, v) > 0.5) n++; }
-      if (n >= 7) obj[r * COLS + c] = 1;
+    const x0 = p.x - p.w / 2, y0 = p.y - p.h, steps = Math.max(8, Math.ceil(p.h * 10));
+    for (let c = Math.max(0, Math.floor(x0)); c <= Math.min(COLS - 1, Math.floor(x0 + p.w)); c++) {
+      const tops = []; // マスの中の 4 本の縦の線で、モノの一番上を探す
+      for (let b = 0; b < 4; b++) { const u = (c + (b + 0.5) / 4 - x0) / p.w; if (u < 0 || u >= 1) continue;
+        for (let k = 0; k < steps; k++) { const v = (k + 0.5) / steps; if (p.alpha(u, v) > 0.5) { tops.push(y0 + v * p.h); break; } } }
+      if (tops.length < 2) continue; // 細すぎる所（先っぽ）には乗らない
+      tops.sort((a, b) => a - b);
+      const y = tops[1], r = Math.floor(y), i = r * COLS + c; // 2番目に高い所（ぎざぎざを抑える）
+      if (r < 2 || r >= ROWS || y >= best[i]) continue;
+      if (t[i] !== E && !isPlat(t[i])) continue; // マップの地面の中には作らない
+      best[i] = y; t[i] = p.code ?? PPLAT; off[i] = Math.min(0.9, Math.round((y - r) * 10) / 10);
     }
   }
-  for (let r = 2; r < ROWS; r++) for (let c = 0; c < COLS; c++) { const i = r * COLS + c; if (obj[i] && !obj[i - COLS] && (t[i] === E || t[i] === PPLAT)) t[i] = PPLAT; }
   normalize(t, start, goal);
-  return t;
+  return { tiles: t, off };
 }
+// マスの中の高さ（off）を文字にする／戻す（1マス1文字、0〜9 = 0.0〜0.9）
+const offToStr = off => off && off.some(v => v) ? Array.from(off, v => Math.round(v * 10)).join("") : null;
+const strToOff = s => typeof s === "string" && s.length === COLS * ROWS && /^[0-9]+$/.test(s) ? Float32Array.from(s, ch => +ch / 10) : null;
 // ==ENGINE END==
 
 // ---------- 小道具 ----------
@@ -874,6 +899,7 @@ const IMG_W = 640, IMG_H = 352; // 保存する写真の大きさ（コースと
 function canvasOf(w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
 
 // ---------- コースの描画 ----------
+const FX_COLOR = { [PRAND]: "rgba(168,85,247,.6)", [PSPRING]: "rgba(255,120,180,.6)", [PFAST]: "rgba(255,160,0,.6)", [PSLIP]: "rgba(80,200,255,.6)" }; // 作る画面で効果つきの足場を色分け
 const COL = { solid: "rgba(16,15,12,.3)", edge: "#fffbe8", plat: "#ffd23f", spike: "#ff3b30", water: "rgba(47,111,237,.5)", bounce: "#2fbf55", ink: "#1b1a17" };
 function drawTiles(ctx, st, cs, grid) {
   const t = st.tiles;
@@ -888,9 +914,10 @@ function drawTiles(ctx, st, cs, grid) {
       if (tileAt(t, c - 1, r) !== SOLID && c > 0) ctx.fillRect(x, y, lw * .6, cs);
       if (tileAt(t, c + 1, r) !== SOLID && c < COLS - 1) ctx.fillRect(x + cs - lw * .6, y, lw * .6, cs);
       ctx.globalAlpha = 1;
-    } else if (v === PSOLID || v === PPLAT) {
+    } else if (v === PSOLID || v === PPLAT || (v >= PRAND && v <= PSLIP)) {
       if (grid) { // 作る画面だけ：写真から作った地面がどこかを、うすく見せる（遊ぶ画面では写真のまま）
-        ctx.fillStyle = "rgba(255,255,255,.16)"; ctx.fillRect(x, y, cs, v === PPLAT ? cs * 0.3 : cs);
+        const oy = v === PSOLID ? 0 : (st.off?.[r * COLS + c] || 0) * cs;
+        ctx.fillStyle = v >= PRAND ? FX_COLOR[v] : "rgba(255,255,255,.16)"; ctx.fillRect(x, y + oy, cs, v === PSOLID ? cs : cs * 0.3);
         ctx.fillStyle = "rgba(255,255,255,.75)";
         if (r > 0 && !standable(tileAt(t, c, r - 1)) && tileAt(t, c, r - 1) !== PSOLID) ctx.fillRect(x, y, cs, Math.max(1, cs * 0.06));
       }
@@ -951,11 +978,11 @@ let stages = load("pa_stages", []);
 function saveStages() { if (!store("pa_stages", stages)) { toast("保存できませんでした（端末の保存容量がいっぱいかもしれません）"); return false; } return true; }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 async function hydrate(s) { // 保存形式 → 遊べる形（tiles を配列に、写真を Image に）
-  const st = { ...s, tiles: typeof s.tiles === "string" ? strToTiles(s.tiles) : s.tiles };
+  const st = { ...s, tiles: typeof s.tiles === "string" ? strToTiles(s.tiles) : s.tiles, off: typeof s.off === "string" ? strToOff(s.off) : s.off || null };
   try { st.imgEl = await loadImage(s.img); } catch (e) { st.imgEl = null; }
   return st;
 }
-const dehydrate = st => { const { imgEl, ...rest } = st; return { ...rest, tiles: tilesToStr(st.tiles) }; };
+const dehydrate = st => { const { imgEl, ...rest } = st; return { ...rest, tiles: tilesToStr(st.tiles), off: st.off && typeof st.off !== "string" ? offToStr(st.off) : st.off }; };
 
 // ---------- コースを作る ----------
 let mk = null; // { photo, fit, feat, opts, tiles, start, goal, edited, tool, undo, cleared, id, name, fixedCrop, imgEl }
@@ -976,9 +1003,9 @@ $("#photoIn").addEventListener("change", async e => {
 function startMake({ photo, stage }) {
   mk = { photo, opts: { ...DEFAULT_OPTS, ...(stage?.opts || {}) }, tool: SOLID, undo: [], cleared: null, id: stage?.id || null, name: stage?.name || "", fixedCrop: !!stage, from: stage?.from || "mine", author: stage?.author || null };
   refit();
-  if (stage) { mk.tiles = Uint8Array.from(stage.tiles); mk.start = { ...stage.start }; mk.goal = { ...stage.goal }; mk.cps = cleanCps(stage.cps); mk.edited = true; mk.cleared = stage.best || null; }
+  if (stage) { mk.tiles = Uint8Array.from(stage.tiles); mk.start = { ...stage.start }; mk.goal = { ...stage.goal }; mk.cps = cleanCps(stage.cps); mk.off = typeof stage.off === "string" ? strToOff(stage.off) : stage.off ? Float32Array.from(stage.off) : null; mk.edited = true; mk.cleared = stage.best || null; }
   else { regen(); detectObjects(); }
-  if (stage) mk.reach = { ok: reach({ tiles: mk.tiles, start: mk.start, goal: mk.goal }).ok, added: 0 };
+  if (stage) mk.reach = { ok: reach({ tiles: mk.tiles, off: mk.off, start: mk.start, goal: mk.goal }).ok, added: 0 };
   show("make"); syncPanel(); drawMake();
 }
 function refit() {
@@ -1099,10 +1126,10 @@ function startPlace(i) {
   const map = MAPS[i], art = canvasOf(IMG_W, IMG_H); paintMap(art.getContext("2d"), map, IMG_W, IMG_H);
   pl = { map, base: mapTiles(map), art, stickers: [], placed: [], cur: -1, size: 6 };
   $("#placeTitle").textContent = `${map.name}にモノを置く`; $("#stSize").value = pl.size;
-  renderStickers(); show("place"); drawPlace();
+  renderStickers(); showFx(); show("place"); drawPlace();
 }
 const stickerAlpha = s => (u, v) => s.mask[Math.min(s.h - 1, Math.floor(v * s.h)) * s.w + Math.min(s.w - 1, Math.floor(u * s.w))];
-function placedList() { return pl.placed.map(p => { const s = pl.stickers[p.si]; return { x: p.x, y: p.y, w: p.w, h: p.w * s.h / s.w, alpha: stickerAlpha(s), s }; }); }
+function placedList() { return pl.placed.map(p => { const s = pl.stickers[p.si]; return { x: p.x, y: p.y, w: p.w, h: p.w * s.h / s.w, alpha: stickerAlpha(s), code: EFFECTS.find(e => e.k === s.fx)?.code ?? PPLAT, s }; }); }
 function composite() { // マップの絵＋置いたモノ（保存する写真）
   const cv = canvasOf(IMG_W, IMG_H), ctx = cv.getContext("2d"), cs = IMG_W / COLS;
   ctx.drawImage(pl.art, 0, 0);
@@ -1113,9 +1140,12 @@ function drawPlace() {
   const cv = $("#pl"), w = cv.parentElement.clientWidth * DPR() || IMG_W, cs = w / COLS;
   cv.width = Math.round(w); cv.height = Math.round(cs * ROWS);
   const ctx = cv.getContext("2d"); ctx.drawImage(composite(), 0, 0, cv.width, cv.height);
-  const t = placeTiles(pl.base, placedList(), pl.map.start, pl.map.goal);
-  ctx.fillStyle = "rgba(255,255,255,.85)"; // 置いたモノの、乗れる上の面（この画面だけ）
-  for (let i = 0; i < t.length; i++) if (t[i] === PPLAT && pl.base[i] !== PPLAT) ctx.fillRect((i % COLS) * cs, ((i / COLS) | 0) * cs, cs, Math.max(2, cs * .12));
+  const { tiles: t, off } = placeTiles(pl.base, placedList(), pl.map.start, pl.map.goal);
+  for (let i = 0; i < t.length; i++) { // 置いたモノの、乗れる上の面（この画面だけ。効果つきは色つき）
+    if (!isPlat(t[i]) || (pl.base[i] === t[i] && !off[i])) continue;
+    ctx.fillStyle = t[i] >= PRAND ? FX_COLOR[t[i]].replace(".6)", ".95)") : "rgba(255,255,255,.9)";
+    ctx.fillRect((i % COLS) * cs, (((i / COLS) | 0) + off[i]) * cs - 1, cs, Math.max(2, cs * .12));
+  }
   drawFlag(ctx, pl.map.start, cs, "#ffffff", "S"); drawFlag(ctx, pl.map.goal, cs, null, "G");
 }
 function renderStickers() {
@@ -1181,15 +1211,59 @@ async function cutout(img) {
   octx.putImageData(od, 0, 0);
   return { cv: out, mask, w: cw, h: ch };
 }
+// 撮ったモノの効果。AI（MobileNetV2：ImageNet 1000種類）でモノを見分けて決める。選び直せる
+const EFFECTS = [
+  { k: "none", label: "ふつうの足場", code: PPLAT, note: "乗れるだけ" },
+  { k: "rand", label: "ランダムジャンプ", code: PRAND, note: "踏むとランダムでハイジャンプかロージャンプ" },
+  { k: "spring", label: "ぽよんと跳ねる", code: PSPRING, note: "踏むと高く跳ねる" },
+  { k: "fast", label: "速く走れる", code: PFAST, note: "乗っている間は速く走れる" },
+  { k: "slip", label: "つるつる滑る", code: PSLIP, note: "乗っている間は止まりにくい" },
+];
+const FX_OF = {}; // ImageNet の番号 → 効果
+for (const [k, list] of Object.entries({
+  rand: [401, 487, 508, 527, 528, 579, 590, 593, 613, 620, 662, 664, 673, 681, 687, 707, 761, 782, 810, 878, 881],
+  spring: [417, 429, 430, 434, 522, 574, 658, 721, 722, 747, 750, 768, 797, 805, 850, 852, 890],
+  fast: [436, 444, 468, 479, 502, 511, 514, 573, 609, 627, 630, 656, 665, 670, 671, 717, 734, 751, 770, 774, 817, 880],
+  slip: [440, 441, 504, 505, 572, 631, 647, 659, 720, 725, 737, 773, 804, 809, 849, 883, 898, 899, 907, 923, 928, 929, 966, 967, 968, 969],
+})) for (const i of list) FX_OF[i] = k;
+const KIND_JA = { 508: "キーボード", 878: "キーボード", 579: "ピアノ", 881: "ピアノ", 761: "リモコン", 487: "スマホ", 620: "ノートパソコン", 681: "ノートパソコン", 673: "マウス", 527: "パソコン", 664: "モニター", 782: "画面", 850: "ぬいぐるみ", 721: "まくら", 417: "ふうせん", 805: "サッカーボール", 430: "バスケットボール", 890: "バレーボール", 852: "テニスボール", 770: "くつ", 774: "サンダル", 817: "車", 504: "マグカップ", 968: "カップ", 898: "水筒", 907: "ボトル", 440: "ボトル", 737: "ボトル", 923: "お皿", 849: "ティーポット", 883: "花びん" };
+let clsLoading = null;
+// 切り抜いたモノ（cv）→ { kind: 名前, fx: 効果 }。切り抜いたモノで効果が決まらなければ、写真全体（photo）でも見分ける
+// （キーボードを打つ手が写っていて、手のほうが切り抜かれたときなど）
+async function classify(cv, photo) {
+  if (!clsLoading) clsLoading = loadCut().then(({ ort }) => ort.InferenceSession.create("models/mobilenetv2-12-int8.onnx", { executionProviders: ["wasm"] }).then(sess => ({ ort, sess }))).catch(e => { clsLoading = null; throw e; });
+  const { ort, sess } = await clsLoading, S = 224, mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225];
+  const top3 = async (src, cover) => {
+    const sq = canvasOf(S, S), x = sq.getContext("2d", { willReadFrequently: true }), k = (cover ? Math.max : Math.min)(S / src.width, S / src.height);
+    x.fillStyle = "#fff"; x.fillRect(0, 0, S, S); x.drawImage(src, (S - src.width * k) / 2, (S - src.height * k) / 2, src.width * k, src.height * k);
+    const d = x.getImageData(0, 0, S, S).data, inp = new Float32Array(3 * S * S);
+    for (let i = 0; i < S * S; i++) for (let c = 0; c < 3; c++) inp[c * S * S + i] = (d[i * 4 + c] / 255 - mean[c]) / std[c];
+    const o = (await sess.run({ [sess.inputNames[0]]: new ort.Tensor("float32", inp, [1, 3, S, S]) }))[sess.outputNames[0]].data;
+    return [...o].map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]).slice(0, 3).map(([, i]) => i);
+  };
+  const a = await top3(cv, false);
+  let hit = a.find(i => FX_OF[i]);
+  if (hit == null && photo) hit = (await top3(photo, true)).find(i => FX_OF[i]);
+  if (hit == null) hit = a[0];
+  return { kind: KIND_JA[hit] || null, fx: FX_OF[hit] || "none" };
+}
+function showFx() {
+  const s = pl?.stickers[pl.cur], rule = $("#fxRule"); rule.hidden = !s; if (!s) return;
+  $("#stFx").innerHTML = EFFECTS.map(e => `<option value="${e.k}" ${e.k === s.fx ? "selected" : ""}>${e.label}</option>`).join("");
+  $("#fxNote").textContent = `${s.kind ? `AI の見立て：${s.kind}。` : ""}${EFFECTS.find(e => e.k === s.fx).note}`;
+}
+$("#stFx").addEventListener("change", e => { const s = pl?.stickers[pl.cur]; if (!s) return; s.fx = e.target.value; showFx(); drawPlace(); });
 $("#objIn").addEventListener("change", async e => {
   const f = e.target.files?.[0]; e.target.value = ""; if (!f || !pl) return;
   const url = URL.createObjectURL(f), note = $("#cutNote");
   note.textContent = "モノを切り抜いています…（初めてのときは AI の準備に約16MBを読み込みます）";
   try {
-    const s = await cutout(await loadImage(url));
+    const photo = await loadImage(url), s = await cutout(photo);
     if (!s) { note.textContent = "うまく切り抜けませんでした。モノを写真のまん中に大きく撮ってみてください。"; return; }
-    pl.stickers.push(s); pl.cur = pl.stickers.length - 1; renderStickers();
-    note.textContent = "切り抜けました。マップを押して置いてください。";
+    s.fx = "none"; s.kind = null;
+    try { Object.assign(s, await classify(s.cv, photo)); } catch (err) { console.warn(err); }
+    pl.stickers.push(s); pl.cur = pl.stickers.length - 1; renderStickers(); showFx();
+    note.textContent = `切り抜けました${s.kind ? `（${s.kind}）` : ""}。マップを押して置いてください。`;
   } catch (err) { note.textContent = "この写真は読み込めませんでした"; }
   finally { setTimeout(() => URL.revokeObjectURL(url), 5000); }
 });
@@ -1209,10 +1283,10 @@ $("#objIn").addEventListener("change", async e => {
 $("#stSize").addEventListener("input", e => { if (!pl) return; pl.size = +e.target.value; const last = pl.placed[pl.placed.length - 1]; if (last) { const s = pl.stickers[last.si], oh = last.w * s.h / s.w, nh = pl.size * s.h / s.w; last.y += (nh - oh) / 2; last.w = pl.size; } drawPlace(); });
 // 置き終わったら、ふつうのコースと同じように「テストプレイしてクリアしたら保存」へ
 function finishPlace() {
-  const photo = composite(), tiles = placeTiles(pl.base, placedList(), pl.map.start, pl.map.goal), st = { tiles, start: { ...pl.map.start }, goal: { ...pl.map.goal } };
+  const photo = composite(), { tiles, off } = placeTiles(pl.base, placedList(), pl.map.start, pl.map.goal), st = { tiles, off, start: { ...pl.map.start }, goal: { ...pl.map.goal } };
   const cps = reach(st).ok ? placeCheckpoints(st) : [];
   const name = `${pl.map.name}${pl.placed.length ? "＋モノ" : ""}`;
-  startMake({ photo, stage: { tiles, start: st.start, goal: st.goal, cps, name, opts: { ...DEFAULT_OPTS, ai: false, obj: false } } });
+  startMake({ photo, stage: { tiles, off, start: st.start, goal: st.goal, cps, name, opts: { ...DEFAULT_OPTS, ai: false, obj: false } } });
   mk.fromMap = true; syncPanel();
 }
 
@@ -1236,7 +1310,7 @@ function regen(fix = true) {
     if (!$("#make").hidden) { drawMake(); showReach(); }
   }, 40);
 }
-function checkReach() { mk.reach = { ok: reach({ tiles: mk.tiles, start: mk.start, goal: mk.goal, cps: mk.cps }).ok, added: 0 }; showReach(); }
+function checkReach() { mk.reach = { ok: reach({ tiles: mk.tiles, off: mk.off, start: mk.start, goal: mk.goal, cps: mk.cps }).ok, added: 0 }; showReach(); }
 function showReach() {
   const el = $("#reachNote"), r = mk.reach;
   el.hidden = !r; if (!r) return;
@@ -1254,7 +1328,7 @@ function syncPanel() {
   showReach(); showAI();
   $("#tools").innerHTML = TOOLS.map((t, i) => `<button class="tool ${mk.tool === t.k ? "on" : ""}" data-tool="${i}"><i style="background:${t.sw}"></i>${t.label}</button>`).join("");
 }
-function drawMake() { const cv = $("#mk"); paintStage(cv, { tiles: mk.tiles, start: mk.start, goal: mk.goal, imgEl: mk.imgEl }, cv.parentElement.clientWidth * DPR(), true); }
+function drawMake() { const cv = $("#mk"); paintStage(cv, { tiles: mk.tiles, off: mk.off, start: mk.start, goal: mk.goal, imgEl: mk.imgEl }, cv.parentElement.clientWidth * DPR(), true); }
 document.addEventListener("input", e => {
   const k = e.target.dataset?.opt; if (!k || !mk) return;
   mk.opts[k] = e.target.type === "checkbox" ? e.target.checked : +e.target.value;
@@ -1279,13 +1353,13 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
       const i = mk.cps.findIndex(k => Math.abs(k.c - p.c) <= 1 && Math.abs(k.r - p.r) <= 1);
       if (i >= 0) { mk.cps.splice(i, 1); return; }
       if (mk.cps.length >= 5) { toast("旗は5本までです"); return; }
-      const at = snapFlag({ tiles: mk.tiles, start: mk.start, goal: mk.goal }, p.c, p.r);
+      const at = snapFlag({ tiles: mk.tiles, off: mk.off, start: mk.start, goal: mk.goal }, p.c, p.r);
       if (!at) { toast("ここには旗を立てられません（出直したときに落ちたりトゲに当たったりする場所です）"); return; }
       mk.cps.push(at); normalize(mk.tiles, at);
       if (!reach({ tiles: mk.tiles, start: at, goal: mk.goal }).ok) toast("この旗からはゴールに届かないかもしれません");
       return;
     }
-    mk.tiles[p.r * COLS + p.c] = tool;
+    mk.tiles[p.r * COLS + p.c] = tool; if (mk.off) mk.off[p.r * COLS + p.c] = 0; // 手で描いたマスはマスの上のふち
   };
   cv.addEventListener("pointerdown", e => {
     if (!mk) return; e.preventDefault(); cv.setPointerCapture(e.pointerId);
@@ -1315,17 +1389,17 @@ document.addEventListener("change", e => { // 指を離したときに、ゴー�
     if (!n) toast("小さすぎて選べませんでした。もう少し大きなモノを押してください");
   }
   function dropUnsafeFlags() { // 描き直して足場が無くなった旗は外す
-    const st = { tiles: mk.tiles, start: mk.start, goal: mk.goal }, n = mk.cps.length;
+    const st = { tiles: mk.tiles, off: mk.off, start: mk.start, goal: mk.goal }, n = mk.cps.length;
     mk.cps = mk.cps.filter(k => safeSpot(st, k));
     if (mk.cps.length < n) toast("足場が無くなった旗を外しました");
   }
   cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
   function touched() { const was = mk.edited; mk.edited = true; mk.cleared = null; if (!was) syncPanel(); drawMake(); }
 })();
-function makeStage() { return { id: mk.id, name: mk.name, tiles: mk.tiles, start: mk.start, goal: mk.goal, cps: mk.cps, imgEl: mk.imgEl, opts: mk.opts }; }
+function makeStage() { return { id: mk.id, name: mk.name, tiles: mk.tiles, off: mk.off, start: mk.start, goal: mk.goal, cps: mk.cps, imgEl: mk.imgEl, opts: mk.opts }; }
 async function saveMade(name) {
   const img = mk.fit.toDataURL("image/jpeg", 0.78);
-  const rec = { id: mk.id || uid(), name: name || defaultName(), at: Date.now(), img, tiles: tilesToStr(mk.tiles), start: mk.start, goal: mk.goal, cps: mk.cps, opts: mk.opts, best: mk.cleared, author: mk.author, from: mk.from };
+  const rec = { id: mk.id || uid(), name: name || defaultName(), at: Date.now(), img, tiles: tilesToStr(mk.tiles), start: mk.start, goal: mk.goal, cps: mk.cps, off: offToStr(mk.off), opts: mk.opts, best: mk.cleared, author: mk.author, from: mk.from };
   const i = stages.findIndex(s => s.id === rec.id);
   if (i >= 0) stages[i] = rec; else stages.unshift(rec);
   if (!saveStages()) return false;
@@ -1359,7 +1433,7 @@ const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob
 async function shrinkImg(src, w, h, q) { const im = await loadImage(src), c = canvasOf(w, h); c.getContext("2d").drawImage(im, 0, 0, w, h); return c.toDataURL("image/jpeg", q); }
 async function shareUrl(s) {
   const rec = s.best || s.author;
-  const payload = { v: 1, n: s.name, t: s.tiles, s: [s.start.c, s.start.r], g: [s.goal.c, s.goal.r], k: cleanCps(s.cps).map(p => [p.c, p.r]), i: (await shrinkImg(s.img, 320, 176, 0.6)).split(",")[1], ms: rec?.ms ?? null, gh: rec?.ghost ?? null };
+  const payload = { v: 1, n: s.name, t: s.tiles, s: [s.start.c, s.start.r], g: [s.goal.c, s.goal.r], k: cleanCps(s.cps).map(p => [p.c, p.r]), o: typeof s.off === "string" ? s.off : undefined, i: (await shrinkImg(s.img, 320, 176, 0.6)).split(",")[1], ms: rec?.ms ?? null, gh: rec?.ghost ?? null };
   const raw = new TextEncoder().encode(JSON.stringify(payload));
   let tag = "r", body = raw;
   if (window.CompressionStream) { try { body = await pipe(raw, new CompressionStream("deflate")); tag = "z"; } catch (e) { body = raw; tag = "r"; } }
@@ -1370,7 +1444,7 @@ async function readShare(hash) {
   const raw = tag === "z" ? await pipe(bytes, new DecompressionStream("deflate")) : bytes;
   const p = JSON.parse(new TextDecoder().decode(raw));
   if (p.v !== 1 || typeof p.t !== "string" || p.t.length !== COLS * ROWS) throw new Error("bad");
-  return { id: uid(), name: String(p.n || "もらったコース").slice(0, 40), at: Date.now(), img: "data:image/jpeg;base64," + p.i, tiles: p.t, start: { c: p.s[0], r: p.s[1] }, goal: { c: p.g[0], r: p.g[1] }, cps: cleanCps(Array.isArray(p.k) ? p.k.map(a => ({ c: a?.[0], r: a?.[1] })) : []), best: null, author: p.ms != null ? { ms: p.ms, ghost: p.gh || [] } : null, from: "shared" };
+  return { id: uid(), name: String(p.n || "もらったコース").slice(0, 40), at: Date.now(), img: "data:image/jpeg;base64," + p.i, tiles: p.t, start: { c: p.s[0], r: p.s[1] }, goal: { c: p.g[0], r: p.g[1] }, cps: cleanCps(Array.isArray(p.k) ? p.k.map(a => ({ c: a?.[0], r: a?.[1] })) : []), off: strToOff(p.o) ? p.o : null, best: null, author: p.ms != null ? { ms: p.ms, ghost: p.gh || [] } : null, from: "shared" };
 }
 async function doShare(s) {
   if (!s.best && !s.author) { toast("クリアしたコースだけ送れます"); return; }
@@ -1446,6 +1520,7 @@ function loop(ts) {
         else run.quick = 0;
       }
       if (ev === "cp") { run.cpSeen.add(run.p.cp); run.cpUntil = run.t + 0.9; buzz(25); }
+      if (run.p.fx) { run.fxText = { hi: "ハイジャンプ！", lo: "ロージャンプ…", spring: "ぽよん！" }[run.p.fx]; run.fxUntil = run.t + 0.7; if (run.p.fx === "hi") buzz(40); run.p.fx = null; }
       if (ev === "goal") { run.fin = Math.round(run.t * 1000); buzz([40, 60, 90]); finish(); }
     }
   }
@@ -1485,6 +1560,7 @@ function hud() {
   else if (!run.live && run.mode !== "online") m = `動くとスタート<small>${matchMedia("(pointer: fine)").matches ? "←→ で移動・スペース/↑ でジャンプ" : "◀ ▶ で移動・JUMP でジャンプ"}</small>`;
   else if (run.live && run.t < 0.6 && run.mode === "online") m = "GO!";
   else if (run.fin == null && run.t < run.cpUntil) m = "チェックポイント！";
+  else if (run.fin == null && run.t < (run.fxUntil || 0)) m = run.fxText;
   msg.hidden = !m; if (m) msg.innerHTML = m;
 }
 function finish() {
@@ -1577,7 +1653,7 @@ async function setNetStage(raw, chooser) {
 function onMsg(m) {
   if (!net || !m || typeof m !== "object") return;
   switch (m.t) {
-    case "stage": setNetStage({ id: uid(), name: String(m.s.name).slice(0, 40), img: m.s.img, tiles: m.s.tiles, start: m.s.start, goal: m.s.goal, cps: cleanCps(m.s.cps), best: null, author: m.s.author || null, from: "shared", at: Date.now() }, "opp"); break;
+    case "stage": setNetStage({ id: uid(), name: String(m.s.name).slice(0, 40), img: m.s.img, tiles: m.s.tiles, start: m.s.start, goal: m.s.goal, cps: cleanCps(m.s.cps), off: strToOff(m.s.off) ? m.s.off : null, best: null, author: m.s.author || null, from: "shared", at: Date.now() }, "opp"); break;
     case "ready": net.oppReady = true; renderOnline(); maybeGo(); break;
     case "go": startRace(); break;
     case "p": if (run?.mode === "online") run.opp = m; break;
@@ -1586,7 +1662,7 @@ function onMsg(m) {
 }
 function pickNetStage(i) {
   const s = stages[i]; if (!s.best && !s.author) { toast("クリアしたコースだけ出せます"); return; }
-  const raw = { name: s.name, img: s.img, tiles: s.tiles, start: s.start, goal: s.goal, cps: cleanCps(s.cps), author: s.best || s.author };
+  const raw = { name: s.name, img: s.img, tiles: s.tiles, start: s.start, goal: s.goal, cps: cleanCps(s.cps), off: typeof s.off === "string" ? s.off : null, author: s.best || s.author };
   send({ t: "stage", s: raw });
   setNetStage({ ...s }, "me");
 }
@@ -1644,7 +1720,7 @@ document.addEventListener("click", async e => {
   const i = el.dataset.i != null ? +el.dataset.i : null;
   switch (el.dataset.act) {
     case "map-pick": startPlace(i); break;
-    case "stk-pick": pl.cur = i; renderStickers(); break;
+    case "stk-pick": pl.cur = i; renderStickers(); showFx(); break;
     case "place-undo": pl.placed.pop(); drawPlace(); break;
     case "place-back": if (!pl.placed.length || confirm("置いたモノを捨てて、マップ選びに戻りますか？")) { pl = null; show("maps"); } break;
     case "place-done": finishPlace(); break;
