@@ -1257,16 +1257,24 @@ function overlay(html) { const ov = $("#playOv"); ov.innerHTML = `<div class="sh
 const KEYMAP = { ArrowLeft: "l", KeyA: "l", ArrowRight: "r", KeyD: "r", ArrowUp: "j", KeyW: "j", Space: "j", KeyZ: "j" };
 addEventListener("keydown", e => { const k = KEYMAP[e.code]; if (!k || !run) return; e.preventDefault(); if (k === "j" && !keys.j) keys.jp = true; keys[k] = true; });
 addEventListener("keyup", e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; });
+addEventListener("blur", () => { keys.l = keys.r = keys.j = false; }); // ほかの画面へ切り替えたときにキーが押しっぱなしにならないように
 // 操作：画面のボタン（複数の指を同時に使える）
+// 指がボタンの外へずれてから離れても止まるように、離したことは画面全体で受け取る。指が全部離れた・アプリが裏に回ったときも全部離す
 (() => {
   const held = new Map();
   const set = (k, on) => { if (k === "j" && on && !keys.j) keys.jp = true; keys[k] = on; document.querySelector(`.ctl[data-k="${k}"]`).classList.toggle("on", on); };
+  const up = e => { const k = held.get(e.pointerId); if (!k) return; held.delete(e.pointerId); if (![...held.values()].includes(k)) set(k, false); };
+  const releaseAll = () => { held.clear(); for (const k of ["l", "r", "j"]) set(k, false); };
   document.querySelectorAll(".ctl").forEach(b => {
-    b.addEventListener("pointerdown", e => { e.preventDefault(); b.setPointerCapture?.(e.pointerId); held.set(e.pointerId, b.dataset.k); set(b.dataset.k, true); });
-    const up = e => { const k = held.get(e.pointerId); if (!k) return; held.delete(e.pointerId); if (![...held.values()].includes(k)) set(k, false); };
-    b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up); b.addEventListener("lostpointercapture", up);
+    b.addEventListener("pointerdown", e => { e.preventDefault(); try { b.setPointerCapture?.(e.pointerId); } catch (err) {} held.set(e.pointerId, b.dataset.k); set(b.dataset.k, true); });
+    b.addEventListener("lostpointercapture", up);
     b.addEventListener("contextmenu", e => e.preventDefault());
   });
+  addEventListener("pointerup", up, true); addEventListener("pointercancel", up, true);
+  const touchEnd = e => { if (!e.touches.length && held.size) releaseAll(); };
+  document.addEventListener("touchend", touchEnd, { passive: true }); document.addEventListener("touchcancel", touchEnd, { passive: true });
+  addEventListener("blur", releaseAll);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAll(); });
 })();
 
 // 1人で走る（テスト／マイコース／もらったコース）
